@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ArrowLeft, Check, Timer, Trash2, X } from "lucide-react";
 import { ui } from "../i18n/messages";
 import { TaskScheduleControl } from "./TaskScheduleControl";
+import { TaskMaterials } from "./TaskMaterials";
 import { cn } from "../lib/cn";
 import { parseDateKey, todayKey } from "../lib/dates";
 import { isFocusBindingLocked } from "../lib/pomodoro";
@@ -669,6 +670,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
                 {focusButton}
               </div>
               {noteField}
+              <TaskMaterials taskId={taskId} note={note} />
               {priorityField}
               {planSection}
               {timeSection}
@@ -680,6 +682,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
             <div className="hidden lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start lg:gap-6">
               <div className="space-y-4">
                 {noteField}
+                <TaskMaterials taskId={taskId} note={note} />
                 {subtasksSection}
               </div>
               <aside className="space-y-4">

@@ -4,6 +4,7 @@ import {
   ChevronDown,
   ChevronRight,
   Home,
+  LayoutDashboard,
   ListTodo,
   Timer,
   type LucideIcon,
@@ -34,6 +35,7 @@ export function ViewTabs({ onNavigate }: { onNavigate?: () => void }) {
     {
       label: t.navWork,
       items: [
+        { view: "workspace", label: locale === "zh" ? "工作台" : "Workspace", icon: LayoutDashboard },
         { view: "today", label: t.viewToday, icon: Home },
         { view: "lists", label: t.tasks, icon: ListTodo },
       ],

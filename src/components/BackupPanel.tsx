@@ -10,21 +10,31 @@ import {
   tasksToCsv,
 } from "../lib/backup";
 import { useTodoStore } from "../store/todoStore";
+import { db } from "../db";
 
 export function BackupPanel() {
   const locale = useTodoStore((s) => s.locale);
   const t = ui(locale);
   const [status, setStatus] = useState<"idle" | "success" | "error">("idle");
+  const [busy, setBusy] = useState(false);
+  const [exportError, setExportError] = useState(false);
 
   const exportJson = async () => {
-    const backup = await buildBackup();
-    downloadJson(`todo-backup-${Date.now()}.json`, backup);
+    setBusy(true); setExportError(false);
+    try {
+      const backup = await buildBackup();
+      downloadJson(`todo-backup-${Date.now()}.json`, backup);
+    } catch { setExportError(true); }
+    finally { setBusy(false); }
   };
 
   const exportCsv = async () => {
-    const backup = await buildBackup();
-    const csv = tasksToCsv(backup.tasks, backup.lists);
-    downloadCsv(`todo-tasks-${Date.now()}.csv`, csv);
+    setBusy(true); setExportError(false);
+    try {
+      const [tasks, lists] = await db.transaction("r", db.tasks, db.lists, () => Promise.all([db.tasks.toArray(), db.lists.toArray()]));
+      downloadCsv(`todo-tasks-${Date.now()}.csv`, tasksToCsv(tasks, lists));
+    } catch { setExportError(true); }
+    finally { setBusy(false); }
   };
 
   const onImport = async (file: File | null) => {
@@ -47,6 +57,7 @@ export function BackupPanel() {
       <button
         type="button"
         onClick={() => void exportJson()}
+        disabled={busy}
         className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm"
         title={t.exportJson}
       >
@@ -56,6 +67,7 @@ export function BackupPanel() {
       <button
         type="button"
         onClick={() => void exportCsv()}
+        disabled={busy}
         className="inline-flex items-center gap-1.5 rounded-xl border border-[var(--line)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm"
         title={t.exportCsv}
       >
@@ -88,6 +100,8 @@ export function BackupPanel() {
           {status === "success" ? t.importDone : t.importFailed}
         </span>
       ) : null}
+      {busy ? <span role="status" className="text-xs text-[var(--muted)]">{locale === "zh" ? "正在打包备份…" : "Preparing backup…"}</span> : null}
+      {exportError ? <span role="alert" className="text-xs text-[var(--danger)]">{locale === "zh" ? "导出失败，请检查文件完整性或可用空间后重试。" : "Export failed. Check files and available memory, then retry."}</span> : null}
     </div>
   );
 }

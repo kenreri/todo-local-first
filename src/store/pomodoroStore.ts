@@ -24,6 +24,7 @@ import { DEFAULT_POMODORO_CONFIG } from "../types";
 const RUNTIME_KEY = "todo-pomodoro-runtime-v1";
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let hydrated = false;
+let hydrationPromise: Promise<void> | null = null;
 
 interface PomodoroRuntime {
   phase: PomodoroPhase;
@@ -75,26 +76,63 @@ function readRuntime(): PomodoroRuntime {
       value?.phase ?? "",
     );
     if (!value || !validPhase) return defaultRuntime();
-    return {
-      ...defaultRuntime(),
-      ...value,
-      running: Boolean(value.running),
-      remainingSeconds: Math.max(0, Number(value.remainingSeconds) || 0),
-      workCycles: Math.max(0, Number(value.workCycles) || 0),
+    const isCounter = (number: unknown) =>
+      typeof number === "number" && Number.isSafeInteger(number) && number >= 0;
+    for (const key of [
+      "remainingSeconds",
+      "workCycles",
+      "accumulatedWorkSeconds",
+    ] as const) {
+      if (value[key] !== undefined && !isCounter(value[key]))
+        return defaultRuntime();
+    }
+    for (const key of [
+      "sessionStartedAt",
+      "activeSegmentStartedAt",
+      "phaseEndsAt",
+    ] as const) {
+      if (value[key] != null && !isCounter(value[key])) return defaultRuntime();
+    }
+    if (value.running !== undefined && typeof value.running !== "boolean")
+      return defaultRuntime();
+    const boundTaskId =
+      typeof value.boundTaskId === "string" ? value.boundTaskId : null;
+    const runtime: PomodoroRuntime = {
+      phase: value.phase as PomodoroPhase,
+      running: value.running === true,
+      remainingSeconds:
+        value.remainingSeconds ?? defaultRuntime().remainingSeconds,
+      workCycles: value.workCycles ?? 0,
+      boundTaskId,
       sessionTaskId: isFocusBindingLocked(
         value.phase as PomodoroPhase,
         value.sessionStartedAt ?? null,
       )
         ? resolveSessionTaskId(
-            value.sessionTaskId ?? null,
-            value.boundTaskId ?? null,
+            typeof value.sessionTaskId === "string"
+              ? value.sessionTaskId
+              : null,
+            boundTaskId,
           )
         : null,
-      accumulatedWorkSeconds: Math.max(
-        0,
-        Number(value.accumulatedWorkSeconds) || 0,
-      ),
+      accumulatedWorkSeconds: value.accumulatedWorkSeconds ?? 0,
+      sessionStartedAt: value.sessionStartedAt ?? null,
+      activeSegmentStartedAt: value.running
+        ? (value.activeSegmentStartedAt ?? null)
+        : null,
+      phaseEndsAt: value.running ? (value.phaseEndsAt ?? null) : null,
     };
+    if (
+      runtime.running &&
+      (runtime.phase === "idle" ||
+        runtime.phaseEndsAt == null ||
+        (runtime.phase === "work" &&
+          (runtime.sessionStartedAt == null ||
+            runtime.activeSegmentStartedAt == null)))
+    ) {
+      return defaultRuntime();
+    }
+    return runtime;
   } catch {
     return defaultRuntime();
   }
@@ -114,11 +152,16 @@ function persistRuntime(state: PomodoroState) {
     activeSegmentStartedAt: state.activeSegmentStartedAt,
     phaseEndsAt: state.phaseEndsAt,
   };
-  localStorage.setItem(RUNTIME_KEY, JSON.stringify(runtime));
+  try {
+    localStorage.setItem(RUNTIME_KEY, JSON.stringify(runtime));
+  } catch (error) {
+    // Losing reload recovery must not prevent the in-memory clock from running.
+    console.warn("Could not persist the pomodoro runtime", error);
+  }
 }
 
 function clearTick() {
-  if (!tickTimer) return;
+  if (tickTimer === null) return;
   clearInterval(tickTimer);
   tickTimer = null;
 }
@@ -147,7 +190,7 @@ function notify(title: string, body: string) {
 }
 
 async function persistWorkSession(state: PomodoroState, endAt: number) {
-  if (!state.sessionStartedAt) return false;
+  if (state.sessionStartedAt == null) return false;
   const duration = Math.min(
     activeWorkSecondsAt(state, endAt),
     phaseDurationSeconds("work", state.config),
@@ -165,18 +208,22 @@ async function persistWorkSession(state: PomodoroState, endAt: number) {
 }
 
 async function notifyWorkComplete(taskId: string | null) {
-  const chinese = document.documentElement.lang.startsWith("zh");
-  const task = taskId ? await db.tasks.get(taskId) : null;
-  notify(
-    chinese ? "专注完成" : "Focus complete",
-    task?.title
-      ? chinese
-        ? `已完成「${task.title}」的一轮专注。`
-        : `Finished a focus session for “${task.title}”.`
-      : chinese
-        ? "本轮专注已完成。"
-        : "Focus session complete.",
-  );
+  try {
+    const chinese = document.documentElement.lang.startsWith("zh");
+    const task = taskId ? await db.tasks.get(taskId) : null;
+    notify(
+      chinese ? "专注完成" : "Focus complete",
+      task?.title
+        ? chinese
+          ? `已完成「${task.title}」的一轮专注。`
+          : `Finished a focus session for “${task.title}”.`
+        : chinese
+          ? "本轮专注已完成。"
+          : "Focus session complete.",
+    );
+  } catch (error) {
+    console.warn("Could not show the focus completion notification", error);
+  }
 }
 
 function notifyBreakComplete() {
@@ -192,52 +239,90 @@ const restoredRuntime = readRuntime();
 export const usePomodoroStore = create<PomodoroState>((set, get) => {
   const save = () => persistRuntime(get());
 
-  const finishPhase = async () => {
-    clearTick();
+  let transition: Promise<void> | null = null;
+  let runtimeRevision = 0;
+
+  // Natural completion and manual finishing share one in-flight operation.
+  const finishPhase = (skipped = false): Promise<void> => {
+    if (transition) return transition;
     const state = get();
-    const finishedAt = now();
-
-    if (state.phase === "work") {
-      await persistWorkSession(state, finishedAt);
-      await notifyWorkComplete(state.sessionTaskId);
-      const nextCycles = state.workCycles + 1;
-      const longBreak = nextCycles % state.config.cyclesBeforeLongBreak === 0;
-      const nextPhase: PomodoroPhase = longBreak ? "longBreak" : "shortBreak";
-      const autoStart = shouldAutoStartPhase(nextPhase, state.config);
-      const remainingSeconds = phaseDurationSeconds(nextPhase, state.config);
-      playCuesForPhaseTransition(state.config, autoStart);
-      set({
-        phase: nextPhase,
-        running: autoStart,
-        remainingSeconds,
-        workCycles: nextCycles,
-        sessionTaskId: null,
-        sessionStartedAt: null,
-        accumulatedWorkSeconds: 0,
-        activeSegmentStartedAt: null,
-        phaseEndsAt: autoStart ? finishedAt + remainingSeconds * 1000 : null,
-      });
-      save();
-      if (autoStart) startTicking();
-      return;
+    if (
+      state.phase === "idle" ||
+      (skipped && state.phase === "work" && state.sessionStartedAt == null)
+    ) {
+      return Promise.resolve();
     }
+    const revision = runtimeRevision;
+    const finishedAt =
+      state.running && state.phaseEndsAt != null
+        ? Math.min(now(), state.phaseEndsAt)
+        : now();
+    clearTick();
 
-    notifyBreakComplete();
-    const autoStart = shouldAutoStartPhase("work", state.config);
-    const remainingSeconds = phaseDurationSeconds("work", state.config);
-    playCuesForPhaseTransition(state.config, autoStart);
-    set({
-      phase: "work",
-      running: autoStart,
-      remainingSeconds,
-      sessionTaskId: autoStart ? state.boundTaskId : null,
-      sessionStartedAt: autoStart ? finishedAt : null,
-      accumulatedWorkSeconds: 0,
-      activeSegmentStartedAt: autoStart ? finishedAt : null,
-      phaseEndsAt: autoStart ? finishedAt + remainingSeconds * 1000 : null,
-    });
-    save();
-    if (autoStart) startTicking();
+    const operation = Promise.resolve()
+      .then(async () => {
+        if (revision !== runtimeRevision) return;
+        // Freeze elapsed time before writing. A failed write leaves a retryable session.
+        set({
+          running: false,
+          remainingSeconds: remainingSecondsAt(state, finishedAt),
+          accumulatedWorkSeconds:
+            state.phase === "work"
+              ? activeWorkSecondsAt(state, finishedAt)
+              : state.accumulatedWorkSeconds,
+          activeSegmentStartedAt: null,
+          phaseEndsAt: null,
+        });
+        save();
+
+        const recorded =
+          state.phase === "work" &&
+          (await persistWorkSession(state, finishedAt));
+        // Reset can start another session while the previous database write is pending.
+        if (revision !== runtimeRevision) return;
+        const workCycles =
+          state.workCycles +
+          (state.phase === "work" && (!skipped || recorded) ? 1 : 0);
+        const nextPhase: PomodoroPhase =
+          state.phase === "work"
+            ? workCycles > 0 &&
+              workCycles % state.config.cyclesBeforeLongBreak === 0
+              ? "longBreak"
+              : "shortBreak"
+            : "work";
+        const autoStart = shouldAutoStartPhase(nextPhase, state.config);
+        const remainingSeconds = phaseDurationSeconds(nextPhase, state.config);
+        const startedAt = now();
+        const startsWork = nextPhase === "work" && autoStart;
+        set({
+          phase: nextPhase,
+          running: autoStart,
+          remainingSeconds,
+          workCycles,
+          sessionTaskId: startsWork ? state.boundTaskId : null,
+          sessionStartedAt: startsWork ? startedAt : null,
+          accumulatedWorkSeconds: 0,
+          activeSegmentStartedAt: startsWork ? startedAt : null,
+          phaseEndsAt: autoStart ? startedAt + remainingSeconds * 1000 : null,
+        });
+        save();
+        if (autoStart) startTicking();
+        playCuesForPhaseTransition(state.config, autoStart);
+        if (!skipped) {
+          if (state.phase === "work")
+            void notifyWorkComplete(state.sessionTaskId);
+          else notifyBreakComplete();
+        }
+      })
+      .catch((error) => {
+        // Keep the frozen runtime; the user can retry finishing or resume it.
+        console.error("Could not save the focus session", error);
+      })
+      .finally(() => {
+        if (transition === operation) transition = null;
+      });
+    transition = operation;
+    return operation;
   };
 
   const startTicking = () => {
@@ -259,29 +344,34 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     ...restoredRuntime,
     config: DEFAULT_POMODORO_CONFIG,
 
-    hydrateConfig: async () => {
-      if (hydrated) return;
-      hydrated = true;
-      const settings = await getSettings();
-      const config = normalizePomodoroConfig(settings.pomodoroConfig);
-      const state = get();
-      const remainingSeconds = remainingSecondsAt(state, now());
+    hydrateConfig: () => {
+      if (hydrated) return Promise.resolve();
+      if (hydrationPromise) return hydrationPromise;
+      hydrationPromise = (async () => {
+        const settings = await getSettings();
+        const config = normalizePomodoroConfig(settings.pomodoroConfig);
+        const state = get();
+        const remainingSeconds = remainingSecondsAt(state, now());
 
-      if (state.running && remainingSeconds <= 0) {
-        set({ config, remainingSeconds: 0 });
-        await finishPhase();
-        return;
-      }
-
-      set({
-        config,
-        remainingSeconds:
-          state.phase === "idle"
-            ? phaseDurationSeconds("work", config)
-            : remainingSeconds,
+        if (state.running && remainingSeconds <= 0) {
+          set({ config, remainingSeconds: 0 });
+          await finishPhase();
+        } else {
+          set({
+            config,
+            remainingSeconds:
+              state.phase === "idle"
+                ? phaseDurationSeconds("work", config)
+                : remainingSeconds,
+          });
+          save();
+          if (state.running) startTicking();
+        }
+        hydrated = true;
+      })().finally(() => {
+        hydrationPromise = null;
       });
-      save();
-      if (state.running) startTicking();
+      return hydrationPromise;
     },
 
     updateConfig: async (patch) => {
@@ -301,12 +391,17 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
 
     bindTask: (taskId) => {
       const state = get();
-      if (isFocusBindingLocked(state.phase, state.sessionStartedAt)) return;
+      if (
+        transition ||
+        isFocusBindingLocked(state.phase, state.sessionStartedAt)
+      )
+        return;
       set({ boundTaskId: taskId });
       save();
     },
 
     startWork: () => {
+      if (transition || get().running) return;
       unlockPomodoroAudio();
       const state = get();
       const startedAt = now();
@@ -340,8 +435,12 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
 
     pause: () => {
       const state = get();
-      if (!state.running) return;
+      if (transition || !state.running) return;
       const pausedAt = now();
+      if (remainingSecondsAt(state, pausedAt) <= 0) {
+        void finishPhase();
+        return;
+      }
       clearTick();
       set({
         running: false,
@@ -357,6 +456,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     },
 
     resume: () => {
+      if (transition || get().running) return;
       unlockPomodoroAudio();
       const state = get();
       if (state.phase === "idle") {
@@ -382,6 +482,8 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     },
 
     reset: () => {
+      runtimeRevision += 1;
+      transition = null;
       clearTick();
       const state = get();
       set({
@@ -393,54 +495,9 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
       save();
     },
 
-    skip: async () => {
-      clearTick();
+    skip: () => {
       unlockPomodoroAudio();
-      const state = get();
-      const skippedAt = now();
-      const recorded =
-        state.phase === "work" && (await persistWorkSession(state, skippedAt));
-
-      if (state.phase === "work") {
-        const nextCycles = state.workCycles + (recorded ? 1 : 0);
-        const longBreak =
-          nextCycles > 0 &&
-          nextCycles % state.config.cyclesBeforeLongBreak === 0;
-        const nextPhase: PomodoroPhase = longBreak ? "longBreak" : "shortBreak";
-        const autoStart = shouldAutoStartPhase(nextPhase, state.config);
-        const remainingSeconds = phaseDurationSeconds(nextPhase, state.config);
-        playCuesForPhaseTransition(state.config, autoStart);
-        set({
-          phase: nextPhase,
-          running: autoStart,
-          remainingSeconds,
-          workCycles: nextCycles,
-          sessionTaskId: null,
-          sessionStartedAt: null,
-          accumulatedWorkSeconds: 0,
-          activeSegmentStartedAt: null,
-          phaseEndsAt: autoStart ? skippedAt + remainingSeconds * 1000 : null,
-        });
-        save();
-        if (autoStart) startTicking();
-        return;
-      }
-
-      const autoStart = shouldAutoStartPhase("work", state.config);
-      const remainingSeconds = phaseDurationSeconds("work", state.config);
-      playCuesForPhaseTransition(state.config, autoStart);
-      set({
-        phase: "work",
-        running: autoStart,
-        remainingSeconds,
-        sessionTaskId: autoStart ? state.boundTaskId : null,
-        sessionStartedAt: autoStart ? skippedAt : null,
-        accumulatedWorkSeconds: 0,
-        activeSegmentStartedAt: autoStart ? skippedAt : null,
-        phaseEndsAt: autoStart ? skippedAt + remainingSeconds * 1000 : null,
-      });
-      save();
-      if (autoStart) startTicking();
+      return finishPhase(true);
     },
   };
 });

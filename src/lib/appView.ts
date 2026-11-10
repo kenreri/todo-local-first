@@ -1,6 +1,7 @@
 import type { AppView, Locale, ThemeMode } from "../types";
 
 export const APP_VIEWS: AppView[] = [
+  "workspace",
   "lists",
   "list",
   "calendar",

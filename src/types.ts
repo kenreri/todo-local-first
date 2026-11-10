@@ -2,6 +2,7 @@ export type Priority = "none" | "low" | "medium" | "high";
 export type Locale = "zh" | "en";
 export type ThemeMode = "light" | "dark" | "system";
 export type AppView =
+  | "workspace"
   | "lists"
   | "list"
   | "calendar"
@@ -78,6 +79,39 @@ export interface TaskRecord {
   createdAt: number;
   updatedAt: number;
   deletedAt: number | null;
+}
+
+export type WorkspaceKind = "inbox" | "idea" | "note" | "resource";
+
+/** Free-form material; an optional task supplies scheduling and completion. */
+export interface WorkspaceItem {
+  id: string;
+  title: string;
+  body: string;
+  kind: WorkspaceKind;
+  taskId: string | null;
+  intention: "want" | "need";
+  archivedAt: number | null;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+export interface AttachmentRecord {
+  id: string;
+  itemId: string;
+  name: string;
+  mime: string;
+  size: number;
+  createdAt: number;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
+/** Read file bytes on demand rather than on every workspace refresh. */
+export interface AttachmentBlob {
+  id: string;
+  data: Blob;
 }
 
 /** Append-only focus sessions */

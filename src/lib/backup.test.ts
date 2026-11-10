@@ -50,7 +50,7 @@ describe("backup validation", () => {
   it("accepts a structurally valid backup", () => {
     const normalized = validateBackupPayload(validBackup);
     expect(normalized.lists).toHaveLength(1);
-    expect(normalized.version).toBe(3);
+    expect(normalized.version).toBe(4);
     expect(normalized.habits).toEqual([]);
     expect(normalized.anime).toEqual([]);
   });

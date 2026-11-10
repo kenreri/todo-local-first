@@ -10,10 +10,14 @@ import type {
   PomodoroRecord,
   SettingsRecord,
   TaskRecord,
+  WorkspaceItem,
+  AttachmentRecord,
 } from "../types";
 
+export interface BackupAttachment extends AttachmentRecord { base64: string }
+
 export interface BackupPayload {
-  version: 3;
+  version: 4;
   exportedAt: number;
   lists: ListRecord[];
   tasks: TaskRecord[];
@@ -22,6 +26,8 @@ export interface BackupPayload {
   habitCheckIns: HabitCheckInRecord[];
   anime: AnimeRecord[];
   settings: SettingsRecord | null;
+  workspaceItems: WorkspaceItem[];
+  attachments: BackupAttachment[];
 }
 
 export async function buildBackup(): Promise<BackupPayload> {
@@ -33,7 +39,10 @@ export async function buildBackup(): Promise<BackupPayload> {
     habitCheckIns,
     anime,
     settings,
-  ] = await Promise.all([
+    workspaceItems,
+    attachments,
+    blobs,
+  ] = await db.transaction("r", db.tables, () => Promise.all([
     db.lists.toArray(),
     db.tasks.toArray(),
     db.pomodoroRecords.toArray(),
@@ -41,9 +50,24 @@ export async function buildBackup(): Promise<BackupPayload> {
     db.habitCheckIns.toArray(),
     db.anime.toArray(),
     db.settings.get("app"),
-  ]);
+    db.workspaceItems.toArray(),
+    db.attachments.toArray(),
+    db.attachmentBlobs.toArray(),
+  ]));
+  const byId = new Map(blobs.map(blob => [blob.id, blob.data]));
+  const encoded: BackupAttachment[] = [];
+  for (const attachment of attachments) {
+    const data = byId.get(attachment.id);
+    if (!data || data.size !== attachment.size) throw new Error("Attachment bytes missing");
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    const chunks: string[] = [];
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + 8192)));
+    }
+    encoded.push({ ...attachment, base64: btoa(chunks.join("")) });
+  }
   return {
-    version: 3,
+    version: 4,
     exportedAt: now(),
     lists,
     tasks,
@@ -52,6 +76,8 @@ export async function buildBackup(): Promise<BackupPayload> {
     habitCheckIns,
     anime,
     settings: settings ?? null,
+    workspaceItems,
+    attachments: encoded,
   };
 }
 
@@ -104,8 +130,13 @@ export function downloadCsv(filename: string, csv: string) {
   triggerDownload(filename, blob);
 }
 
-export async function importBackupJson(payload: BackupPayload) {
+export async function importBackupJson(payload: unknown) {
   const validated = validateBackupPayload(payload);
+  // Decode before starting the write transaction; invalid bytes never clear data.
+  const attachmentBlobs = validated.attachments.map(attachment => ({
+    id: attachment.id,
+    data: new Blob([Uint8Array.from(atob(attachment.base64), char => char.charCodeAt(0))], { type: attachment.mime }),
+  }));
   await db.transaction(
     "rw",
     [
@@ -116,6 +147,9 @@ export async function importBackupJson(payload: BackupPayload) {
       db.habitCheckIns,
       db.anime,
       db.settings,
+      db.workspaceItems,
+      db.attachments,
+      db.attachmentBlobs,
     ],
     async () => {
       await db.lists.clear();
@@ -124,6 +158,12 @@ export async function importBackupJson(payload: BackupPayload) {
       await db.habits.clear();
       await db.habitCheckIns.clear();
       await db.anime.clear();
+      await db.workspaceItems.clear();
+      await db.attachments.clear();
+      await db.attachmentBlobs.clear();
+      await db.workspaceItems.bulkPut(validated.workspaceItems);
+      await db.attachments.bulkPut(validated.attachments.map(({ base64: _bytes, ...meta }) => meta));
+      await db.attachmentBlobs.bulkPut(attachmentBlobs);
       if (validated.lists.length) await db.lists.bulkPut(validated.lists);
       if (validated.tasks.length) await db.tasks.bulkPut(validated.tasks);
       if (validated.pomodoroRecords.length) {
@@ -169,7 +209,8 @@ export async function readJsonFile(file: File): Promise<BackupPayload> {
 export function validateBackupPayload(value: unknown): BackupPayload {
   if (
     !isRecord(value) ||
-    ![1, 2, 3].includes(Number(value.version)) ||
+    typeof value.version !== "number" ||
+    ![1, 2, 3, 4].includes(value.version) ||
     !isFiniteNumber(value.exportedAt)
   ) {
     throw new Error("Unsupported or invalid backup");
@@ -204,7 +245,7 @@ export function validateBackupPayload(value: unknown): BackupPayload {
   assertUniqueIds(habitCheckIns, "habitCheckIns");
 
   const anime =
-    value.version === 3
+    Number(value.version) >= 3
       ? value.anime
       : legacyAnimeFromHabits(habits, value.exportedAt);
   if (!Array.isArray(anime) || !anime.every(isAnimeRecord)) {
@@ -214,6 +255,17 @@ export function validateBackupPayload(value: unknown): BackupPayload {
 
   const listIds = new Set(value.lists.map((list) => list.id));
   const taskIds = new Set(value.tasks.map((task) => task.id));
+  const workspaceItems = value.version === 4 ? value.workspaceItems : [];
+  const attachments = value.version === 4 ? value.attachments : [];
+  if (!Array.isArray(workspaceItems) || !workspaceItems.every(isWorkspaceItem) ||
+      !Array.isArray(attachments) || !attachments.every(isBackupAttachment)) {
+    throw new Error("Invalid workspace backup structure");
+  }
+  assertUniqueIds(workspaceItems, "workspaceItems");
+  assertUniqueIds(attachments, "attachments");
+  const itemIds = new Set(workspaceItems.map(item => item.id));
+  if (attachments.some(file => !itemIds.has(file.itemId))) throw new Error("Attachment without its item");
+  if (workspaceItems.some(item => item.taskId != null && !taskIds.has(item.taskId))) throw new Error("Workspace item without its task");
   if (value.tasks.some((task) => !listIds.has(task.listId))) {
     throw new Error("Backup contains a task without its list");
   }
@@ -241,7 +293,7 @@ export function validateBackupPayload(value: unknown): BackupPayload {
   );
 
   return {
-    version: 3,
+    version: 4,
     exportedAt: value.exportedAt,
     lists: value.lists,
     tasks: value.tasks.map((task) => ({
@@ -254,6 +306,8 @@ export function validateBackupPayload(value: unknown): BackupPayload {
     habits: normalizedHabits,
     habitCheckIns,
     anime: anime.map(normalizeAnimeRecord),
+    workspaceItems,
+    attachments,
     settings: value.settings
       ? {
           ...value.settings,
@@ -267,6 +321,25 @@ export function validateBackupPayload(value: unknown): BackupPayload {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
+}
+
+function isWorkspaceItem(value: unknown): value is WorkspaceItem {
+  return isRecord(value) && typeof value.id === "string" && value.id.length > 0 &&
+    typeof value.title === "string" && value.title.trim().length > 0 && typeof value.body === "string" &&
+    ["inbox", "idea", "note", "resource"].includes(String(value.kind)) &&
+    ["want", "need"].includes(String(value.intention)) && isNullableString(value.taskId) &&
+    isNullableNumber(value.archivedAt) && hasSyncTimestamps(value);
+}
+
+function isBackupAttachment(value: unknown): value is BackupAttachment {
+  if (!isRecord(value) || typeof value.id !== "string" || !value.id || typeof value.itemId !== "string" ||
+      typeof value.name !== "string" || typeof value.mime !== "string" ||
+      !Number.isSafeInteger(value.size) || Number(value.size) < 0 || !hasSyncTimestamps(value) ||
+      typeof value.base64 !== "string") return false;
+  const encoded = value.base64;
+  const padding = encoded.endsWith("==") ? 2 : encoded.endsWith("=") ? 1 : 0;
+  if (encoded.length % 4 !== 0 || /[^A-Za-z0-9+/]/.test(encoded.slice(0, encoded.length - padding))) return false;
+  return encoded.length / 4 * 3 - padding === value.size;
 }
 
 function isFiniteNumber(value: unknown): value is number {
@@ -461,6 +534,7 @@ function isSettingsRecord(value: unknown): value is SettingsRecord {
     value.id === "app" &&
     ["light", "dark", "system"].includes(String(value.theme)) &&
     [
+      "workspace",
       "list",
       "lists",
       "board",

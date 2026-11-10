@@ -44,6 +44,7 @@ import { liveQuery } from "dexie";
 import { coerceAppView, coerceLocale, coerceTheme } from "../lib/appView";
 import { normalizeAnimeEmoji, normalizeAnimeRecord } from "../lib/anime";
 import { applyTheme } from "../lib/theme";
+import { reconcileRecords } from "../lib/reconcileRecords";
 
 let bootstrapped = false;
 const BOOTSTRAP_TIMEOUT_MS = 2500;
@@ -230,6 +231,16 @@ interface TodoState {
   ) => Promise<void>;
 }
 
+interface TodoSnapshot {
+  lists: ListRecord[];
+  tasks: TaskRecord[];
+  pomodoroRecords: PomodoroRecord[];
+  habits: HabitRecord[];
+  habitCheckIns: HabitCheckInRecord[];
+  anime: AnimeRecord[];
+  settings: SettingsRecord | undefined;
+}
+
 function aliveLists(lists: ListRecord[]) {
   return lists
     .filter((item) => item.deletedAt == null)
@@ -311,24 +322,32 @@ export const useTodoStore = create<TodoState>((set, get) => ({
     if (bootstrapped) return;
     bootstrapped = true;
 
-    const applySnapshot = async (tables: {
-      lists: ListRecord[];
-      tasks: TaskRecord[];
-      pomodoroRecords: PomodoroRecord[];
-      habits: HabitRecord[];
-      habitCheckIns: HabitCheckInRecord[];
-      anime: AnimeRecord[];
-      settings: SettingsRecord | undefined;
-    }) => {
-      const nextLists = aliveLists(tables.lists);
-      const nextTasks = aliveTasks(tables.tasks);
-      const nextPomodoros = [...tables.pomodoroRecords].sort(
-        (a, b) => b.endAt - a.endAt,
-      );
-      const nextHabits = aliveHabits(tables.habits);
-      const nextHabitCheckIns = aliveHabitCheckIns(tables.habitCheckIns);
-      const nextAnime = aliveAnime(tables.anime);
+    const applySnapshot = (tables: Partial<TodoSnapshot>) => {
       const current = get();
+      const nextLists = tables.lists
+        ? reconcileRecords(current.lists, aliveLists(tables.lists))
+        : current.lists;
+      const nextTasks = tables.tasks
+        ? reconcileRecords(current.tasks, aliveTasks(tables.tasks))
+        : current.tasks;
+      const nextPomodoros = tables.pomodoroRecords
+        ? reconcileRecords(
+            current.pomodoroRecords,
+            [...tables.pomodoroRecords].sort((a, b) => b.endAt - a.endAt),
+          )
+        : current.pomodoroRecords;
+      const nextHabits = tables.habits
+        ? reconcileRecords(current.habits, aliveHabits(tables.habits))
+        : current.habits;
+      const nextHabitCheckIns = tables.habitCheckIns
+        ? reconcileRecords(
+            current.habitCheckIns,
+            aliveHabitCheckIns(tables.habitCheckIns),
+          )
+        : current.habitCheckIns;
+      const nextAnime = tables.anime
+        ? reconcileRecords(current.anime, aliveAnime(tables.anime))
+        : current.anime;
       const selectedListId =
         current.selectedListId == null ||
         nextLists.some((list) => list.id === current.selectedListId)
@@ -371,51 +390,6 @@ export const useTodoStore = create<TodoState>((set, get) => ({
         tables.settings?.mascotTop ?? current.mascotTop,
       );
 
-      const listsSame =
-        current.lists.length === nextLists.length &&
-        current.lists.every(
-          (list, index) =>
-            list.id === nextLists[index]?.id &&
-            list.updatedAt === nextLists[index]?.updatedAt,
-        );
-      const tasksSame =
-        current.tasks.length === nextTasks.length &&
-        current.tasks.every(
-          (task, index) =>
-            task.id === nextTasks[index]?.id &&
-            task.updatedAt === nextTasks[index]?.updatedAt &&
-            task.sortOrder === nextTasks[index]?.sortOrder &&
-            task.listId === nextTasks[index]?.listId &&
-            task.dueDate === nextTasks[index]?.dueDate &&
-            task.scheduledDate === nextTasks[index]?.scheduledDate,
-        );
-      const pomosSame =
-        current.pomodoroRecords.length === nextPomodoros.length &&
-        current.pomodoroRecords.every(
-          (item, index) => item.id === nextPomodoros[index]?.id,
-        );
-      const habitsSame =
-        current.habits.length === nextHabits.length &&
-        current.habits.every(
-          (item, index) =>
-            item.id === nextHabits[index]?.id &&
-            item.updatedAt === nextHabits[index]?.updatedAt,
-        );
-      const habitCheckInsSame =
-        current.habitCheckIns.length === nextHabitCheckIns.length &&
-        current.habitCheckIns.every(
-          (item, index) =>
-            item.id === nextHabitCheckIns[index]?.id &&
-            item.updatedAt === nextHabitCheckIns[index]?.updatedAt,
-        );
-      const animeSame =
-        current.anime.length === nextAnime.length &&
-        current.anime.every(
-          (item, index) =>
-            item.id === nextAnime[index]?.id &&
-            item.updatedAt === nextAnime[index]?.updatedAt,
-        );
-
       if (
         current.ready &&
         current.locale === locale &&
@@ -433,18 +407,19 @@ export const useTodoStore = create<TodoState>((set, get) => ({
         current.mascotTop === mascotTop &&
         current.selectedListId === selectedListId &&
         current.selectedTaskId === selectedTaskId &&
-        listsSame &&
-        tasksSame &&
-        pomosSame &&
-        habitsSame &&
-        habitCheckInsSame &&
-        animeSame
+        current.lists === nextLists &&
+        current.tasks === nextTasks &&
+        current.pomodoroRecords === nextPomodoros &&
+        current.habits === nextHabits &&
+        current.habitCheckIns === nextHabitCheckIns &&
+        current.anime === nextAnime
       ) {
         return;
       }
 
-      applyTheme(theme);
-      document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+      if (!current.ready || current.theme !== theme) applyTheme(theme);
+      if (!current.ready || current.locale !== locale)
+        document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
       set({
         ready: true,
         locale,
@@ -482,27 +457,50 @@ export const useTodoStore = create<TodoState>((set, get) => ({
       document.documentElement.lang = settings.locale === "zh" ? "zh-CN" : "en";
       applyTheme(settings.theme ?? "system");
 
-      const loadTables = async () => ({
-        lists: await db.lists.toArray(),
-        tasks: await db.tasks.toArray(),
-        pomodoroRecords: await db.pomodoroRecords.toArray(),
-        habits: await db.habits.toArray(),
-        habitCheckIns: await db.habitCheckIns.toArray(),
-        anime: await db.anime.toArray(),
-        settings: await db.settings.get("app"),
-      });
+      const queries = {
+        lists: () => db.lists.toArray(),
+        tasks: () => db.tasks.toArray(),
+        pomodoroRecords: () => db.pomodoroRecords.toArray(),
+        habits: () => db.habits.toArray(),
+        habitCheckIns: () => db.habitCheckIns.toArray(),
+        anime: () => db.anime.toArray(),
+        settings: () => db.settings.get("app"),
+      };
+      const loadTables = async (): Promise<TodoSnapshot> => {
+        const [lists, tasks, pomodoroRecords, habits, habitCheckIns, anime, settings] =
+          await Promise.all([
+            queries.lists(),
+            queries.tasks(),
+            queries.pomodoroRecords(),
+            queries.habits(),
+            queries.habitCheckIns(),
+            queries.anime(),
+            queries.settings(),
+          ]);
+        return {
+          lists, tasks, pomodoroRecords, habits, habitCheckIns, anime, settings,
+        };
+      };
 
-      await withTimeout(applySnapshot(await loadTables()), BOOTSTRAP_TIMEOUT_MS, "load-tables");
+      applySnapshot(await loadTables());
 
-      liveQuery(loadTables).subscribe({
-        next: (tables) => {
-          void applySnapshot(tables);
-        },
-        error: (error) => {
-          console.error(error);
-          if (!get().ready) set({ ready: true });
-        },
-      });
+      // Settings writes and unrelated tables must not reload every collection.
+      const watch = <K extends keyof TodoSnapshot>(
+        key: K,
+        query: () => Promise<TodoSnapshot[K]>,
+      ) => {
+        liveQuery(query).subscribe({
+          next: (value) => applySnapshot({ [key]: value }),
+          error: (error) => console.error(error),
+        });
+      };
+      watch("lists", queries.lists);
+      watch("tasks", queries.tasks);
+      watch("pomodoroRecords", queries.pomodoroRecords);
+      watch("habits", queries.habits);
+      watch("habitCheckIns", queries.habitCheckIns);
+      watch("anime", queries.anime);
+      watch("settings", queries.settings);
     } catch (error) {
       console.error(error);
       set({ ready: true });
@@ -834,52 +832,50 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   },
 
   updateTask: async (id, patch) => {
-    const task = await db.tasks.get(id);
-    if (!task || task.deletedAt) return;
-    if (patch.listId && patch.listId !== task.listId) {
-      await get().moveTaskToList(id, patch.listId);
-      const nextTask = await db.tasks.get(id);
-      if (!nextTask) return;
+    // Keep the read, optional tree move and write in one serialized transaction.
+    await db.transaction("rw", db.tasks, async () => {
+      let task = await db.tasks.get(id);
+      if (!task || task.deletedAt != null) return;
+      if (patch.listId && patch.listId !== task.listId) {
+        await get().moveTaskToList(id, patch.listId);
+        task = await db.tasks.get(id);
+        if (!task || task.deletedAt != null) return;
+      }
       await db.tasks.put({
-        ...nextTask,
+        ...task,
         ...patch,
-        title: patch.title?.trim() ?? nextTask.title,
+        title: patch.title?.trim() ?? task.title,
         updatedAt: now(),
       });
-      return;
-    }
-    await db.tasks.put({
-      ...task,
-      ...patch,
-      title: patch.title?.trim() ?? task.title,
-      updatedAt: now(),
     });
   },
 
   toggleTask: async (id, occurrenceDate) => {
-    const task = await db.tasks.get(id);
-    if (!task || task.deletedAt) return;
-    const stamp = now();
+    await db.transaction("rw", db.tasks, async () => {
+      const task = await db.tasks.get(id);
+      if (!task || task.deletedAt != null) return;
+      const stamp = now();
 
-    if (task.repeatRule && !task.completedAt) {
-      const currentDue = occurrenceDate ?? task.dueDate ?? toDateFallback(task);
-      const nextDue = nextOccurrenceAfter(task, currentDue);
-      if (nextDue) {
-        await db.tasks.put({
-          ...task,
-          dueDate: nextDue,
-          scheduledDate: null,
-          completedAt: null,
-          updatedAt: stamp,
-        });
-        return;
+      if (task.repeatRule && task.completedAt == null) {
+        const currentDue = occurrenceDate ?? task.dueDate ?? toDateFallback(task);
+        const nextDue = nextOccurrenceAfter(task, currentDue);
+        if (nextDue) {
+          await db.tasks.put({
+            ...task,
+            dueDate: nextDue,
+            scheduledDate: null,
+            completedAt: null,
+            updatedAt: stamp,
+          });
+          return;
+        }
       }
-    }
 
-    await db.tasks.put({
-      ...task,
-      completedAt: task.completedAt ? null : stamp,
-      updatedAt: stamp,
+      await db.tasks.put({
+        ...task,
+        completedAt: task.completedAt != null ? null : stamp,
+        updatedAt: stamp,
+      });
     });
   },
 
@@ -977,15 +973,14 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   },
 
   setTaskDueDate: async (taskId, dueDate) => {
-    const task = await db.tasks.get(taskId);
-    if (!task || task.deletedAt) return;
-    await db.tasks.put({ ...task, dueDate, updatedAt: now() });
+    await get().updateTask(taskId, { dueDate });
   },
 
   setTaskScheduledDate: async (taskId, scheduledDate) => {
-    const task = await db.tasks.get(taskId);
-    if (!task || task.deletedAt) return;
-    await db.tasks.put({ ...task, scheduledDate, ...(!scheduledDate ? { scheduledTime: null } : {}), updatedAt: now() });
+    await get().updateTask(taskId, {
+      scheduledDate,
+      ...(!scheduledDate ? { scheduledTime: null } : {}),
+    });
   },
 
   createHabit: async (input) => {

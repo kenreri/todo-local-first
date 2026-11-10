@@ -16,7 +16,7 @@ import { DEFAULT_POMODORO_CONFIG } from './types'
 const DEFAULT_SETTINGS: SettingsRecord = {
   id: 'app',
   theme: 'system',
-  defaultView: 'list',
+  defaultView: 'workspace',
   locale: 'zh',
   sakuraEnabled: true,
   wallpaperEnabled: true,

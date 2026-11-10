@@ -3,6 +3,7 @@ import type { AppView } from "../types";
 import { useTodoStore } from "../store/todoStore";
 
 const VIEW_KEYS: AppView[] = [
+  "workspace",
   "today",
   "list",
   "habits",
@@ -11,8 +12,8 @@ const VIEW_KEYS: AppView[] = [
 ];
 
 function focusShortcutInput(shortcut: "create" | "search") {
-  const input = document.querySelector<HTMLInputElement>(
-    `input[data-shortcut="${shortcut}"]`,
+  const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+    `[data-shortcut="${shortcut}"]`,
   );
   if (!input || input.disabled || input.getClientRects().length === 0)
     return false;
@@ -28,7 +29,6 @@ function focusAfterViewChange(shortcut: "create" | "search") {
 
 export function useShortcuts() {
   const setView = useTodoStore((s) => s.setView);
-  const openInbox = useTodoStore((s) => s.openInbox);
   const view = useTodoStore((s) => s.view);
   const theme = useTodoStore((s) => s.theme);
   const setTheme = useTodoStore((s) => s.setTheme);
@@ -41,6 +41,7 @@ export function useShortcuts() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (document.querySelector("dialog[open]")) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
       const typing =
@@ -69,8 +70,7 @@ export function useShortcuts() {
         return;
       }
 
-      if (event.key >= "1" && event.key <= "5") {
-        // Main shortcuts follow the five consolidated navigation entries.
+      if (event.key >= "1" && event.key <= "6") {
         const view = VIEW_KEYS[Number(event.key) - 1];
         if (view) void setView(view);
         return;
@@ -104,14 +104,13 @@ export function useShortcuts() {
       if (event.key.toLowerCase() === "n") {
         event.preventDefault();
         if (focusShortcutInput("create")) return;
-        void openInbox().then(() => focusAfterViewChange("create"));
+        void setView("workspace").then(() => focusAfterViewChange("create"));
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
-    openInbox,
     setView,
     view,
     theme,

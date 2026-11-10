@@ -5,6 +5,7 @@ import {
   CheckSquare2,
   Flower2,
   Home,
+  LayoutDashboard,
   Image as ImageIcon,
   Languages,
   ListChecks,
@@ -41,15 +42,15 @@ export function AppNavigation() {
     (state) => state.setSidebarCollapsed,
   );
   const t = ui(locale);
-  const openInbox = useTodoStore((state) => state.openInbox);
+  const setView = useTodoStore((state) => state.setView);
 
   // Global capture always opens the inbox.
   const openQuickCapture = async () => {
-    await openInbox();
+    await setView("workspace");
     setMobileOpen(false);
     window.setTimeout(() => {
       document
-        .querySelector<HTMLInputElement>('input[data-shortcut="create"]')
+        .querySelector<HTMLTextAreaElement>('textarea[data-shortcut="create"]')
         ?.focus();
     }, 0);
   };
@@ -208,6 +209,7 @@ function CollapsedRail({
   // 窄条态：Logo 当「展开并跳到今天页」按钮；下面是一列主导航图标，
   // 点图标 = 展开 + 跳到对应页面。没有浮层。
   const items: { view: AppView; label: string; icon: LucideIcon }[] = [
+    { view: "workspace", label: locale === "zh" ? "工作台" : "Workspace", icon: LayoutDashboard },
     { view: "today", label: t.viewToday, icon: Home },
     { view: "lists", label: t.tasks, icon: ListTodo },
     { view: "habits", label: t.navLife, icon: CheckSquare2 },
@@ -558,9 +560,9 @@ function MobileBar({ onMore }: { onMore: () => void }) {
     (state) => state.remainingSeconds,
   );
   const items: { view: AppView; label: string; icon: LucideIcon }[] = [
-    { view: "today", label: t.viewToday, icon: Home },
+    { view: "workspace", label: locale === "zh" ? "工作台" : "Workspace", icon: LayoutDashboard },
     { view: "lists", label: t.tasks, icon: ListTodo },
-    { view: "habits", label: t.navLife, icon: CheckSquare2 },
+    { view: "today", label: t.viewToday, icon: Home },
     { view: "pomodoro", label: t.navFocus, icon: Timer },
   ];
 

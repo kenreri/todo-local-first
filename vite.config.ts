@@ -19,9 +19,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
-        name: 'Lists Todo',
-        short_name: 'Todo',
-        description: 'Local-first personal task manager',
+        name: '个人工作台',
+        short_name: '工作台',
+        description: 'Local-first workspace for plans, notes, ideas and files',
         theme_color: '#0f6e56',
         background_color: '#f3f1ec',
         display: 'standalone',

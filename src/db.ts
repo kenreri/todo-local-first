@@ -7,6 +7,9 @@ import type {
   PomodoroRecord,
   SettingsRecord,
   TaskRecord,
+  WorkspaceItem,
+  AttachmentRecord,
+  AttachmentBlob,
 } from "./types";
 import { DEFAULT_POMODORO_CONFIG } from "./types";
 
@@ -18,6 +21,9 @@ export class TodoDatabase extends Dexie {
   habits!: EntityTable<HabitRecord, "id">;
   habitCheckIns!: EntityTable<HabitCheckInRecord, "id">;
   anime!: EntityTable<AnimeRecord, "id">;
+  workspaceItems!: EntityTable<WorkspaceItem, "id">;
+  attachments!: EntityTable<AttachmentRecord, "id">;
+  attachmentBlobs!: EntityTable<AttachmentBlob, "id">;
 
   constructor() {
     super("todo-local-first");
@@ -195,6 +201,13 @@ export class TodoDatabase extends Dexie {
           if (task.scheduledTime === undefined) task.scheduledTime = null;
         });
       });
+    this.version(9).stores({
+      workspaceItems: "id, kind, taskId, archivedAt, updatedAt, deletedAt",
+      attachments: "id, itemId, updatedAt, deletedAt",
+      attachmentBlobs: "id",
+    }).upgrade(async tx => {
+      await tx.table("settings").update("app", { defaultView: "workspace" });
+    });
   }
 }
 

@@ -24,7 +24,7 @@ const zh = {
   optionalDeadline: "截止时间（可选）",
   taskMore: "更多选项",
   viewAllLists: "清单概览",
-  appName: "\u6e05\u5355",
+  appName: "个人工作台",
   appSubtitle:
     "\u672c\u5730\u4f18\u5148\u7684\u4e2a\u4eba\u4efb\u52a1\u7ba1\u7406",
   navWork: "工作",
@@ -389,7 +389,7 @@ const zh = {
     "\u6ca1\u6709\u627e\u5230\u5339\u914d\u7684\u6761\u76ee\uff0c\u53ef\u4ee5\u81ea\u5b9a\u4e49\u6dfb\u52a0\u3002",
   animeCustomToggle: "\u81ea\u5b9a\u4e49\u6dfb\u52a0",
   animeCustomHide: "\u6536\u8d77\u81ea\u5b9a\u4e49",
-  shortcutsHint: "1-5 页面 · B 列表/日历 · / 搜索 · N 随手记 · D 主题 · Esc 取消",
+  shortcutsHint: "1-6 页面 · B 列表/日历 · / 搜索 · N 随手记 · D 主题 · Esc 取消",
 } as const;
 
 const en: {
@@ -420,7 +420,7 @@ const en: {
   optionalDeadline: "Deadline (optional)",
   taskMore: "More options",
   viewAllLists: "List overview",
-  appName: "Lists",
+  appName: "My Workspace",
   appSubtitle: "Local-first personal task manager",
   navWork: "Work",
   navLife: "Life",
@@ -766,7 +766,7 @@ const en: {
   animeCustomToggle: "Add custom",
   animeCustomHide: "Hide custom",
   shortcutsHint:
-    "1-5 views · B list/calendar · / search · N capture · D theme · Esc clear",
+    "1-6 views · B list/calendar · / search · N capture · D theme · Esc clear",
 };
 
 export const messages = { zh, en } as const;

@@ -19,6 +19,9 @@ import { coerceAppView } from "./lib/appView";
 import { cn } from "./lib/cn";
 import { DEFAULT_WALLPAPER_URL } from "./seed";
 import { useTodoStore } from "./store/todoStore";
+import { FocusAmbience } from "./components/FocusAmbience";
+
+const WorkspaceView = lazy(() => import("./components/WorkspaceView").then(module => ({ default: module.WorkspaceView })));
 
 const CalendarView = lazy(() =>
   import("./components/CalendarView").then((module) => ({
@@ -107,7 +110,7 @@ export default function App() {
     );
   }
 
-  const showsTaskDrawer = ["today", "list", "calendar"].includes(view);
+  const showsTaskDrawer = ["workspace", "today", "list", "calendar"].includes(view);
   // 留空 = 默认 Yurikoto 随机源；仅默认源做窄屏竖版自适应
   const wallpaperSource = wallpaperUrl || DEFAULT_WALLPAPER_URL;
   const wallpaperActive = wallpaperEnabled;
@@ -155,6 +158,7 @@ export default function App() {
               </div>
             }
           >
+            {view === "workspace" ? <WorkspaceView /> : null}
             {view === "lists" ? <ListsOverview /> : null}
             {view === "list" ? <ListView /> : null}
             {view === "calendar" ? <CalendarView /> : null}
@@ -172,6 +176,7 @@ export default function App() {
             ) : null}
             {view === "stats" ? <StatsView /> : null}
           </Suspense>
+          <FocusAmbience visible={view === "pomodoro"} />
           {showsTaskDrawer ? <DetailPanel /> : null}
         </main>
       </div>

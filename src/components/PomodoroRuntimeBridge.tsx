@@ -30,7 +30,9 @@ export function PomodoroRuntimeBridge() {
           : t.phaseIdle;
 
   useEffect(() => {
-    void hydrateConfig();
+    void hydrateConfig().catch((error) => {
+      console.error("Could not load focus settings", error);
+    });
   }, [hydrateConfig]);
 
   useEffect(() => {

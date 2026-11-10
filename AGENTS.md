@@ -1,4 +1,4 @@
-# TODO 清单（local-first）
+# 个人工作台（local-first）
 
 Codex / 其他 Agent 先读本文件。跨 Agent 工作流见 `跨Agent协作方案.md`。  
 详细规划以 `ROADMAP.md`、`开发入门导读.md` 为准（必须是 UTF-8）。
@@ -7,36 +7,37 @@ Codex / 其他 Agent 先读本文件。跨 Agent 工作流见 `跨Agent协作方
 
 1. 读本文件（硬约束）。
 2. 读 `CURRENT.md` 确认**下一刀**；若与用户提示冲突，以用户指定切片为准。
-3. 若无 `CURRENT.md` 或未写明下一刀：看 `ROADMAP.md` 未勾选的最早项（默认 **M5**；可选 Tauri 不算）。
+3. 若无 `CURRENT.md` 或未写明下一刀：看 `ROADMAP.md` 未勾选的最早项（默认大阶段为 **M5**；可选 Tauri 不算；CURRENT 明确的质量切片或暂缓安排优先）。
 4. 扫 `经验手册.md` 中与本次主题相关的条目，避免重复踩坑。
 5. 改 UI 先读 `design.md`；改数据先读 `src/db.ts`、`src/types.ts` 与现有写入路径。
-6. 需要界面时用 `pnpm dev`，浏览器只开 http://127.0.0.1:5173/（勿混用 localhost）。
+6. 需要界面时用 `pnpm dev`，浏览器只开 http://127.0.0.1:5173/（勿混用 localhost）；本机生产服务占用端口时按 [部署运维](docs/部署运维.md) 先停止服务。
 7. 验证：`pnpm lint`、`pnpm test`、`pnpm build`。
 
 用户说「继续开发」时：按上面 2→3 执行，不要从 M1 重写。
 
 ## 产品与边界
 
-- 个人清单 + 日历 + 番茄钟 + 统计；用户范围仅个人。
+- 个人工作台：自由收集事情、想法、笔记、链接和本地文件，连接任务、DDL、日历与轻量专注；原有生活与回顾保留。用户范围仅个人。
+- 2026-11-11 产品转向：现有 Obsidian / Zotero / VS Code 继续承担专业工作；音乐与陪伴先做轻量功能，完整沉浸空间后置。
 - M1–M4：纯 local-first（React + Dexie/IndexedDB，无后端）。
-- 当前进度：M1–M4.4 已完成（可选 Tauri 未做）。默认下一阶段只做 **M5**（以 `CURRENT.md` 为准）。
+- 当前进度与下一刀只以 `CURRENT.md` 为准；里程碑完成记录见 `ROADMAP.md`。M5 尚未实施，可选 Tauri 默认不做。
 - 不引入：CRDT、Redux、过早后端、Ant Design / shadcn（UI 已定为自定义 Tailwind）。
 - 不要顺手做可选 Tauri。
 
 ## 技术栈
 
-- React 19 + TypeScript + Vite 8；Zustand；Dexie；Tailwind 4；React Router；Recharts；PWA（`vite-plugin-pwa`）
+- React 19 + TypeScript + Vite 8；Zustand；Dexie；Tailwind 4；History API 导航；Recharts；PWA（`vite-plugin-pwa`）
 - 日历：FullCalendar；拖拽：@dnd-kit
 - 包管理：`pnpm`
 - 验证：`pnpm lint`、`pnpm test`、`pnpm build`；本地预览：`pnpm dev`
 
 ## 视图
 
-今天 / 任务（列表、看板）/ 日历 / 习惯 / 看番 / 专注 / 回顾。
+工作台 / 今天 / 任务（清单、列表、日历）/ 生活（习惯、看番）/ 专注 / 回顾。历史 M2 的看板不代表当前导航。
 
 ## UI 颜色（改界面必守）
 
-新增页面或修改界面前必须先读 `design.md`；M4.4 的字阶、间距、圆角、阴影、布局与
+新增页面或修改界面前必须先读 `design.md`；当前定稿的字阶、间距、圆角、阴影、布局与
 浅色 / 深色具体色值以该文件为准。
 
 唯一色源：`src/index.css`（`:root` 浅色，`html[data-theme='dark']` 深色）。组件只引用 CSS 变量。
@@ -54,7 +55,7 @@ Codex / 其他 Agent 先读本文件。跨 Agent 工作流见 `跨Agent协作方
 | `--priority-high/medium/low/none`            | 任务优先级                           |
 
 - 主按钮固定：`bg-[var(--accent)] text-[var(--on-accent)]`
-- 选中态（视图 Tab、侧栏清单）与主按钮同一套，不随视图切换变色
+- 选中态与主按钮使用同一 accent 色系，不随视图切换变色；具体实底/浅底规则按 `design.md` 与现有控件
 - 新增颜色先加 token（浅 + 深各一份），再引用
 - 改 UI 必须浅色、深色各看一眼：输入框、按钮字、选中态、边框
 - 不要给 `button` 写全局 `color: inherit`
@@ -64,16 +65,18 @@ Codex / 其他 Agent 先读本文件。跨 Agent 工作流见 `跨Agent协作方
 
 ## 数据层
 
-- 主键：`crypto.randomUUID()`；业务记录带 `createdAt` / `updatedAt` / `deletedAt`（软删除，不物理删）
-- 表：`lists`、`tasks`、`habits`、`habitCheckIns`、`anime`、`pomodoroRecords`（append-only）、`settings`（单行 LWW）
+- 普通业务记录用 `crypto.randomUUID()`，带 `createdAt` / `updatedAt` / `deletedAt`，日常删除为软删除；`pomodoroRecords` 只追加且仅有 `createdAt`，`settings` 固定主键 `app` 并带 `updatedAt`。JSON 恢复可在事务中替换业务集合。
+- 表：`lists`、`tasks`、`habits`、`habitCheckIns`、`anime`、`pomodoroRecords`（append-only）、`settings`（单行 LWW）、`workspaceItems`、`attachments`、`attachmentBlobs`。附件元数据带时间戳/软删除，字节表按附件 ID 保存 Blob；日常删除保留字节，完整 JSON 备份包括文件内容。
 - 改结构只走 Dexie 递增 `version(n)` + 迁移函数
 - 重复任务用虚实例按规则实时计算，禁止物理复制未来任务
 - M5 才补 `ownerId`；冲突策略仅 LWW，不上 CRDT
-- JSON/CSV 导出导入是 M4 已完成的备份能力，不要删
+- 保留 JSON 导出/导入与 CSV 任务导出；当前没有 CSV 导入，不把它写成完整恢复能力
 
 写入路径：UI → Zustand（必要时）→ Dexie；刷新后数据仍在。
 
 ## 里程碑
+
+下表描述历史阶段范围，当前界面与能力以源码及 `CURRENT.md` 为准。
 
 | 阶段 | 必须交付                                                     | 明确不做                    |
 | ---- | ------------------------------------------------------------ | --------------------------- |
@@ -86,6 +89,7 @@ Codex / 其他 Agent 先读本文件。跨 Agent 工作流见 `跨Agent协作方
 ## 习惯
 
 - 默认只做当前目标切片，不提前实现后续阶段
+- 文档总入口：[README](README.md)；评估、运维与验收专题放 `docs/`，职责见 [跨 Agent 协作方案](跨Agent协作方案.md)。
 - 文档 SSOT：`ROADMAP.md` = 勾选完成态；`开发日志.md` = 切片叙事；`CURRENT.md` = 下一刀；`经验手册.md` = 避坑；本文件 = 约束与开工/收工
 - 回复用简体中文
 - 不要主动 git commit / push，除非用户明确要求
