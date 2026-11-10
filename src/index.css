@@ -1,0 +1,845 @@
+@import 'tailwindcss';
+
+/*
+  Color tokens: define ONLY in :root / html[data-theme='dark'].
+  Palette finalized in M4.5: 樱色物语 (light) × 夜樱 (dark), sakura pink accent.
+  UI must use var(--token). See .cursor/rules/ui-colors.mdc
+*/
+
+:root {
+  color-scheme: light;
+  /* 樱色物语 · light */
+  --bg: #fbf7f9;
+  --bg-elevated: #ffffff;
+  --ink: #2a2330;
+  --muted: #8b8292;
+  --line: #f0e4ea;
+  --accent: #fb7299;
+  --on-accent: #ffffff;
+  --accent-soft: #ffeef4;
+  --danger: #e35d6a;
+  --warn: #d88918;
+  --success: #279a70;
+  --surface: #faf3f6;
+  --surface-input: #ffffff;
+  --chip: #f6ebf0;
+  --hover: #fdeef3;
+  --danger-soft: #ffeef0;
+  --support-pink: #ffd9e5;
+  --support-lilac: #ece4ff;
+  --support-mint: #d9f4ea;
+  --support-sky: #ddeeff;
+  --nav-bg: #fdf9fb;
+  --nav-glass: color-mix(in srgb, var(--nav-bg) 68%, transparent);
+  --sheet-glass: color-mix(in srgb, var(--bg-elevated) 32%, transparent);
+  --wallpaper-scrim: color-mix(in srgb, var(--bg) 28%, transparent);
+  /* 霜面文字兜底：浅色主题下深色字配亮色晕，压住壁纸透出的杂色 */
+  --glass-text-shadow:
+    0 1px 2px rgba(255, 255, 255, 0.45),
+    0 0 6px rgba(255, 255, 255, 0.2);
+  --banner-due: #fff3f5;
+  --banner-due-border: #f4bdc5;
+  --chart-grid: #f0e4ea;
+  --chart-bar: #fb7299;
+  --chart-bar-alt: #8071f5;
+  --focus-work: #ef5a92;
+  --focus-break: #279a70;
+  --focus-long-break: #8071f5;
+  --sakura-petal: rgba(251, 114, 153, 0.5);
+  --shadow-card: 0 8px 28px rgba(120, 60, 90, 0.07);
+  --shadow-floating: 0 18px 48px rgba(120, 60, 90, 0.16);
+  /* 弹窗遮罩：任务详情桌面弹窗的背板；不参与壁纸霜化。
+     浅色用樱白「亮纱」而不是暗纱——暗纱叠亮壁纸会发灰发闷，亮纱+模糊即可分层 */
+  --overlay: rgba(252, 243, 248, 0.55);
+  --shadow: var(--shadow-card);
+  --focus-ring: rgba(251, 114, 153, 0.3);
+  --radius-card: 20px;
+  --radius-panel: 22px;
+  --radius-control: 12px;
+  --radius-small: 10px;
+  --app-background:
+    radial-gradient(circle at 8% 0%, rgba(255, 217, 229, 0.85), transparent 30rem),
+    radial-gradient(circle at 96% 6%, rgba(236, 228, 255, 0.75), transparent 32rem),
+    radial-gradient(circle at 55% -10%, rgba(221, 238, 255, 0.6), transparent 26rem),
+    var(--bg);
+  --priority-high: #e35d6a;
+  --priority-medium: #d88918;
+  --priority-low: #4a90e2;
+  --priority-none: #97909f;
+  font-family:
+    Inter, "SF Pro Text", "Segoe UI", "PingFang SC", "Noto Sans SC",
+    sans-serif;
+  color: var(--ink);
+  background: var(--app-background);
+  line-height: 1.55;
+  font-weight: 400;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+html[data-theme='dark'] {
+  color-scheme: dark;
+  /* 夜樱 · dark */
+  --bg: #131420;
+  --bg-elevated: #1a1c2c;
+  --ink: #f3f0fa;
+  --muted: #a49dbb;
+  --line: #2f3148;
+  --accent: #ff8ab5;
+  --on-accent: #34101f;
+  --accent-soft: #47253c;
+  --danger: #ff8598;
+  --warn: #f0b45a;
+  --success: #6fd3ab;
+  --surface: #232638;
+  --surface-input: #171927;
+  --chip: #272a40;
+  --hover: #362e4d;
+  --danger-soft: #3d2430;
+  --support-pink: #45293a;
+  --support-lilac: #372e52;
+  --support-mint: #23413a;
+  --support-sky: #26374f;
+  --nav-bg: #161828;
+  --nav-glass: color-mix(in srgb, var(--nav-bg) 64%, transparent);
+  --sheet-glass: color-mix(in srgb, var(--bg-elevated) 30%, transparent);
+  --wallpaper-scrim: color-mix(in srgb, var(--bg) 36%, transparent);
+  /* 夜樱：亮色字配深色影，从壁纸光斑里「浮」出来 */
+  --glass-text-shadow:
+    0 1px 2px rgba(8, 9, 16, 0.5),
+    0 0 6px rgba(8, 9, 16, 0.28);
+  --banner-due: #3a242e;
+  --banner-due-border: #70404a;
+  --chart-grid: #2f3148;
+  --chart-bar: #ff8ab5;
+  --chart-bar-alt: #9d8bff;
+  --focus-work: #ff8ab5;
+  --focus-break: #6fd3ab;
+  --focus-long-break: #9d8bff;
+  --sakura-petal: rgba(255, 138, 181, 0.38);
+  --shadow-card: 0 10px 30px rgba(5, 6, 16, 0.35);
+  --shadow-floating: 0 22px 56px rgba(5, 6, 16, 0.55);
+  /* 夜樱遮罩：深底上压重一些保证分层（.75 偏暗，回调到 .65） */
+  --overlay: rgba(5, 6, 16, 0.65);
+  --shadow: var(--shadow-card);
+  --focus-ring: rgba(255, 138, 181, 0.34);
+  --app-background:
+    radial-gradient(circle at 10% 0%, rgba(69, 41, 58, 0.66), transparent 30rem),
+    radial-gradient(circle at 94% 8%, rgba(55, 46, 82, 0.62), transparent 32rem),
+    radial-gradient(circle at 50% 110%, rgba(38, 55, 79, 0.5), transparent 30rem),
+    var(--bg);
+  --priority-high: #ff8598;
+  --priority-medium: #f0b45a;
+  --priority-low: #75adf8;
+  --priority-none: #85889c;
+  background: var(--app-background);
+}
+
+/*
+  壁纸模式二级覆盖：底材类 token 整体转半透明（卡片/列表行/输入框/侧栏全部变霜玻璃），
+  小面积语义色（accent-soft、support-*、priority、海报渐变）保持不透明以维持原界面配色节奏。
+  注意：自定义属性不能引用自身（循环引用会整条失效），此处必须写字面值。
+*/
+html[data-wallpaper='on'] {
+  /* 文字适配：霜面+花壁纸下加强对比（只影响壁纸模式） */
+  --ink: #1f1826;
+  --muted: #645b70;
+  --accent: #ef5a92;
+  --bg-elevated: color-mix(in srgb, #ffffff 45%, transparent);
+  --surface: color-mix(in srgb, #faf3f6 32%, transparent);
+  --surface-input: color-mix(in srgb, #ffffff 45%, transparent);
+  --chip: color-mix(in srgb, #f6ebf0 40%, transparent);
+  --hover: color-mix(in srgb, #fdeef3 40%, transparent);
+  --nav-glass: color-mix(in srgb, #fdf9fb 32%, transparent);
+  --sheet-glass: color-mix(in srgb, #ffffff 14%, transparent);
+  --wallpaper-scrim: color-mix(in srgb, #fbf7f9 8%, transparent);
+  --banner-due: color-mix(in srgb, #fff3f5 65%, transparent);
+  --popup-bg: #ffffff;
+  --glass-text-shadow:
+    0 1px 2px rgba(255, 255, 255, 0.6),
+    0 0 8px rgba(255, 255, 255, 0.32);
+}
+
+html[data-theme='dark'][data-wallpaper='on'] {
+  --ink: #faf8fe;
+  --muted: #bab3cf;
+  --bg-elevated: color-mix(in srgb, #1a1c2c 45%, transparent);
+  --surface: color-mix(in srgb, #232638 32%, transparent);
+  --surface-input: color-mix(in srgb, #171927 45%, transparent);
+  --chip: color-mix(in srgb, #272a40 40%, transparent);
+  --hover: color-mix(in srgb, #362e4d 40%, transparent);
+  --nav-glass: color-mix(in srgb, #161828 30%, transparent);
+  --sheet-glass: color-mix(in srgb, #1a1c2c 12%, transparent);
+  --wallpaper-scrim: color-mix(in srgb, #131420 12%, transparent);
+  --banner-due: color-mix(in srgb, #3a242e 65%, transparent);
+  --popup-bg: #1a1c2c;
+  --glass-text-shadow:
+    0 1px 2px rgba(6, 7, 14, 0.62),
+    0 0 8px rgba(6, 7, 14, 0.36);
+}
+
+/* 壁纸模式下卡片本体也要起霜：轻度模糊即可，颜色要能认出来 */
+html[data-wallpaper='on'] .ui-card,
+html[data-wallpaper='on'] .ui-card-flat {
+  backdrop-filter: blur(14px) saturate(1.15);
+  -webkit-backdrop-filter: blur(14px) saturate(1.15);
+}
+
+/* 桌面侧栏在壁纸模式下必须不透明化：玻璃底+极端明/暗壁纸对冲时，
+   --muted 在浅紫/白底上几乎读不清（用户复验反馈）。从 64-68% 提到 92-94%，
+   加 1px 边 + 阴影，弱化玻璃感但保可读性。 */
+html[data-wallpaper='on'] .nav-desktop {
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: var(--shadow-card);
+}
+html[data-wallpaper='on'] .nav-desktop-collapsed {
+  background: color-mix(in srgb, var(--bg-elevated) 94%, transparent);
+  border-right-color: color-mix(in srgb, var(--line) 80%, transparent);
+  box-shadow: var(--shadow-card);
+}
+
+/* 弹层（菜单/设置弹窗）保持实底：不做壁纸化 */
+html[data-wallpaper='on'] [role='menu'],
+html[data-wallpaper='on'] [role='dialog'] {
+  background: var(--popup-bg);
+}
+
+/* 任务编辑弹窗例外：壁纸模式下跟随工作台做霜玻璃（优先级高于上面的实底规则）。
+   高透 + 高模糊：底色压低到 42%/50% 保持通透，靠 20px 强模糊保文字可读；
+   文字兜底与 .glass-sheet 对齐 */
+html[data-wallpaper='on'] [role='dialog'].task-detail-sheet {
+  background: color-mix(in srgb, #ffffff 42%, transparent);
+  backdrop-filter: blur(20px) saturate(1.15);
+  -webkit-backdrop-filter: blur(20px) saturate(1.15);
+  text-shadow: var(--glass-text-shadow);
+}
+
+html[data-theme='dark'][data-wallpaper='on'] [role='dialog'].task-detail-sheet {
+  background: color-mix(in srgb, #1a1c2c 50%, transparent);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+  max-width: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  overflow-x: clip;
+  background: var(--app-background);
+  font-size: 14px;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
+    box-shadow 160ms ease,
+    transform 160ms ease;
+}
+
+/* Do not set button { color: inherit } - it overrides Tailwind text-* */
+input,
+textarea,
+select {
+  color: var(--ink);
+  background-color: var(--surface-input);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.85;
+}
+
+option {
+  background-color: var(--bg-elevated);
+  color: var(--ink);
+}
+
+button {
+  cursor: pointer;
+}
+
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+:where(button, input, textarea, select, summary):focus-visible {
+  outline: 3px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.ui-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-card);
+}
+
+.ui-card-flat {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-card);
+  background: var(--surface);
+}
+
+.ui-button-primary {
+  border-radius: var(--radius-control);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 600;
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.ui-button-secondary {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--bg-elevated);
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.ui-button-secondary:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--hover);
+}
+
+.ui-input {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-input);
+  color: var(--ink);
+}
+
+.ui-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+  outline: none;
+}
+
+.ui-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--line);
+  outline: none;
+}
+
+.ui-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--line);
+  cursor: pointer;
+}
+
+.ui-range::-moz-range-thumb {
+  width: 1rem;
+  height: 1rem;
+  border-radius: 999px;
+  background: var(--accent);
+  border: 2px solid var(--bg-elevated);
+  box-shadow: 0 0 0 1px var(--line);
+  cursor: pointer;
+}
+
+.ui-range:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.brand-mark {
+  background: linear-gradient(
+    135deg,
+    var(--support-pink) 0 34%,
+    var(--support-lilac) 34% 66%,
+    var(--support-sky) 66% 100%
+  );
+  color: var(--accent);
+}
+
+.focus-card {
+  --focus-phase-color: var(--focus-work);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--focus-phase-color) 12%, var(--bg-elevated)) 0,
+    var(--bg-elevated) 42%
+  );
+}
+
+.focus-card[data-phase='shortBreak'] {
+  --focus-phase-color: var(--focus-break);
+}
+
+.focus-card[data-phase='longBreak'] {
+  --focus-phase-color: var(--focus-long-break);
+}
+
+.focus-timer-progress {
+  filter: drop-shadow(0 0 5px color-mix(in srgb, var(--focus-phase-color) 65%, transparent));
+}
+
+.focus-card[data-running='true'] .focus-timer {
+  animation: focus-breathe 2.8s ease-in-out infinite;
+}
+
+.focus-status {
+  --focus-phase-color: var(--focus-work);
+}
+
+.focus-status[data-phase='shortBreak'] {
+  --focus-phase-color: var(--focus-break);
+}
+
+.focus-status[data-phase='longBreak'] {
+  --focus-phase-color: var(--focus-long-break);
+}
+
+.focus-status-icon {
+  background: color-mix(in srgb, var(--focus-phase-color) 16%, transparent);
+  color: var(--focus-phase-color);
+}
+
+.focus-status-dot {
+  position: absolute;
+  width: 0.4rem;
+  height: 0.4rem;
+  right: -0.12rem;
+  top: -0.12rem;
+  border: 1px solid var(--bg-elevated);
+  border-radius: 999px;
+  background: var(--focus-phase-color);
+}
+
+.focus-status[data-running='true'] .focus-status-dot {
+  animation: focus-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes focus-breathe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 8px color-mix(in srgb, var(--focus-phase-color) 16%, transparent));
+  }
+  50% {
+    filter: drop-shadow(0 0 18px color-mix(in srgb, var(--focus-phase-color) 36%, transparent));
+  }
+}
+
+@keyframes focus-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--focus-phase-color) 38%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 5px transparent;
+  }
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+/* 壁纸模式：工作台底罩。轻度柔化（10px）抹平壁纸高频噪点、保住构图与颜色；
+   文字可读性主力是这层柔化 + 压暗纱，卡片上另有轻霜 */
+.glass-sheet {
+  background: var(--sheet-glass);
+  backdrop-filter: blur(10px) saturate(1.1);
+  -webkit-backdrop-filter: blur(10px) saturate(1.1);
+  /* 极淡文字投影兜底：text-shadow 可继承，卡片实底内的文字几乎无感 */
+  text-shadow: var(--glass-text-shadow);
+}
+
+/* 桌面侧栏窄条（56px）：仅 logo + 展开按钮 */
+.nav-desktop-collapsed {
+  width: 56px;
+  align-items: center;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+.nav-desktop-collapsed .nav-brand-text {
+  display: none;
+}
+
+.todo-calendar .fc {
+  --fc-border-color: var(--line);
+  --fc-button-bg-color: var(--accent);
+  --fc-button-border-color: var(--accent);
+  --fc-button-text-color: var(--on-accent);
+  --fc-button-hover-bg-color: color-mix(in srgb, var(--accent) 85%, black);
+  --fc-button-hover-border-color: color-mix(in srgb, var(--accent) 85%, black);
+  --fc-button-active-bg-color: color-mix(in srgb, var(--accent) 75%, black);
+  --fc-button-active-border-color: color-mix(in srgb, var(--accent) 75%, black);
+  --fc-today-bg-color: color-mix(in srgb, var(--accent-soft) 50%, transparent);
+  --fc-event-bg-color: var(--accent);
+  --fc-event-border-color: var(--accent);
+  --fc-page-bg-color: transparent;
+  --fc-neutral-bg-color: var(--bg-elevated);
+  --fc-list-event-hover-bg-color: var(--hover);
+  font-family: inherit;
+  color: var(--ink);
+  min-width: 0;
+}
+
+.todo-calendar .fc-view-harness,
+.todo-calendar .fc-scrollgrid,
+.todo-calendar .fc-scrollgrid-sync-table {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.todo-calendar .fc .fc-toolbar-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.todo-calendar .fc .fc-daygrid-event {
+  border-radius: var(--radius-small);
+  padding: 2px 6px;
+  font-size: 0.75rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 追番计划：浅紫底 + 主文字，与任务的主色实底做色阶区分 */
+.todo-calendar .fc .fc-daygrid-event.fc-event-anime {
+  background: var(--support-lilac);
+  border-color: color-mix(in srgb, var(--support-lilac) 70%, var(--line));
+  color: var(--ink);
+}
+.todo-calendar .fc .fc-daygrid-event.fc-event-anime:hover {
+  background: color-mix(in srgb, var(--support-lilac) 80%, var(--hover));
+}
+
+.todo-calendar .fc .fc-col-header-cell-cushion,
+.todo-calendar .fc .fc-daygrid-day-number {
+  color: var(--ink);
+}
+
+/* 「今天」：背景已经压到 50% 半透，数字再加主色 + 小圆点作为
+   二次识别，避免整格高饱和主色实底与当天事件撞色。 */
+.todo-calendar .fc .fc-day-today .fc-daygrid-day-number {
+  color: var(--accent);
+  font-weight: 600;
+}
+.todo-calendar .fc .fc-day-today .fc-daygrid-day-number::after {
+  content: "";
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin-left: 4px;
+  vertical-align: middle;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.todo-calendar .fc .fc-button {
+  color: var(--on-accent);
+  border-radius: var(--radius-control);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+@media (max-width: 639px) {
+  .todo-calendar .fc .fc-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .todo-calendar .fc .fc-toolbar-chunk {
+    display: flex;
+    min-width: 0;
+    justify-content: center;
+  }
+
+  .todo-calendar .fc .fc-toolbar-title {
+    font-size: 1.05rem;
+  }
+
+  .todo-calendar .fc .fc-daygrid-day-number {
+    padding: 0.35rem 0.2rem;
+    font-size: 0.75rem;
+  }
+
+  .todo-calendar .fc .fc-daygrid-event {
+    padding-inline: 0.2rem;
+    font-size: 0.68rem;
+  }
+}
+
+/* Whale mascot: visual port of MIT DeepSeek-Balance-Whale-Widget.
+   Colors are the plugin's navy bubble, not app tokens. z-35: above nav, below dialogs. */
+.dshwv-root {
+  position: fixed;
+  z-index: 35;
+  --dshw-scale: 1.5;
+  --dshw-base: clamp(
+    122px,
+    calc(min(250px, min(100vw, 100vh) * 0.28) * var(--dshw-scale)),
+    625px
+  );
+  width: var(--dshw-base);
+  height: var(--dshw-base);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: inherit;
+  transition:
+    left 0.16s ease,
+    top 0.16s ease,
+    transform 0.3s ease;
+}
+.dshwv-root.dshwv-left {
+  transform: scaleX(-1);
+}
+.dshwv-root.dshwv-dragging {
+  cursor: grabbing;
+  transition: none;
+}
+.dshwv-body {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 100%;
+  transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.dshwv-body.dshwv-pressed {
+  transform: scaleY(0.88) scaleX(1.05);
+}
+.dshwv-img {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 59.45%;
+  height: 59.45%;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
+  user-select: none;
+}
+.dshwv-bubble {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  aspect-ratio: 1026 / 700;
+  pointer-events: none;
+  z-index: 1;
+  --dshw-u: calc(var(--dshw-base) / 1026);
+}
+.dshwv-bubble svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.dshwv-bubble.dshwv-bubble-open svg path,
+.dshwv-bubble.dshwv-bubble-open svg ellipse {
+  pointer-events: visiblePainted;
+  cursor: pointer;
+}
+.dshwv-bubble .dshwv-bshape,
+.dshwv-bubble .dshwv-b1,
+.dshwv-bubble .dshwv-b2 {
+  opacity: 0;
+  transform: scale(0.7);
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.dshwv-bubble.dshwv-bubble-open .dshwv-bshape,
+.dshwv-bubble.dshwv-bubble-open .dshwv-b1,
+.dshwv-bubble.dshwv-bubble-open .dshwv-b2 {
+  opacity: 1;
+  transform: none;
+}
+.dshwv-bubble.dshwv-bubble-open .dshwv-b2 {
+  transition-delay: 0s;
+}
+.dshwv-bubble.dshwv-bubble-open .dshwv-b1 {
+  transition-delay: 0.13s;
+}
+.dshwv-bubble.dshwv-bubble-open .dshwv-bshape {
+  transition-delay: 0.26s;
+}
+.dshwv-gif {
+  position: absolute;
+  left: 44.25%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  max-width: calc(var(--dshw-u) * 560);
+  max-height: calc(var(--dshw-u) * 400);
+  display: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
+  object-fit: contain;
+}
+.dshwv-root.dshwv-left .dshwv-gif {
+  transform: translate(-50%, -50%) scaleX(-1);
+}
+.dshwv-bubble.dshwv-bubble-open .dshwv-gif.is-on {
+  display: block;
+  opacity: 1;
+}
+.dshwv-text {
+  position: absolute;
+  left: 44.25%;
+  top: 38%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: #536ba9;
+  line-height: 1.15;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition:
+    opacity 0.16s ease,
+    transform 0.3s ease;
+}
+.dshwv-bubble.dshwv-bubble-open .dshwv-text {
+  opacity: 1;
+  transition:
+    opacity 0.16s ease 0.36s,
+    transform 0.3s ease;
+}
+.dshwv-root.dshwv-left .dshwv-text {
+  transform: translate(-50%, -50%) scaleX(-1);
+}
+.dshwv-label {
+  font-size: calc(var(--dshw-u) * 66);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+}
+.dshwv-amount {
+  font-size: calc(var(--dshw-u) * 128);
+  font-weight: 800;
+  line-height: 1.05;
+}
+.dshwv-wrap {
+  white-space: normal;
+  max-width: calc(var(--dshw-u) * 560);
+  line-height: 1.2;
+}
+.dshwv-hint {
+  font-size: calc(var(--dshw-u) * 56);
+  color: #9fb0d9;
+  letter-spacing: 0.02em;
+  margin-top: calc(var(--dshw-u) * 9);
+  min-height: calc(var(--dshw-u) * 64);
+  line-height: 1.15;
+}
+.dshwv-hint.is-overdue {
+  color: #e0433f;
+}
+.dshwv-menu-btn {
+  position: absolute;
+  top: calc(40.55% + 4px);
+  right: 4px;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(32, 49, 112, 0.85);
+  cursor: pointer;
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.dshwv-menu-btn.dshwv-menu-btn-visible,
+.dshwv-root:hover .dshwv-menu-btn,
+.dshwv-menu-btn:focus-visible {
+  opacity: 1;
+}
+.dshwv-menu-btn span {
+  display: block;
+  width: 14px;
+  height: 2px;
+  background: #fff;
+  border-radius: 1px;
+}
+.dshwv-menu-btn:hover {
+  background: #203170;
+}
+.dshwv-menu {
+  position: fixed;
+  min-width: 196px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(32, 49, 112, 0.35);
+  border-radius: 10px;
+  padding: 10px 12px;
+  z-index: 10000;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  color-scheme: light;
+  pointer-events: auto;
+}
+.dshwv-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 5px 0;
+  color: #203170;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.dshwv-range {
+  flex: 1;
+  min-width: 0;
+  accent-color: #203170;
+}
+.dshwv-hide {
+  flex: 1;
+  border: 1px solid rgba(32, 49, 112, 0.4);
+  border-radius: 6px;
+  background: rgba(32, 49, 112, 0.08);
+  color: #203170;
+  font-size: 12px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.dshwv-hide:hover {
+  background: rgba(32, 49, 112, 0.16);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}

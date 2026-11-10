@@ -1,0 +1,5 @@
+Whale mascot assets from MeteorNOX/DeepSeek-Balance-Whale-Widget (MIT).
+https://github.com/MeteorNOX/DeepSeek-Balance-Whale-Widget
+
+DSniang1.png, rua.gif, Ya1.mp3, Ya2.mp3, bubble geometry and widget CSS
+are used here under the terms in LICENSE.txt.

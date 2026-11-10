@@ -1,0 +1,15 @@
+---
+description: TODO 清单项目总览与技术边界（始终生效）；细节以 AGENTS.md 为准
+alwaysApply: true
+---
+
+# TODO 清单 · 项目约束
+
+权威细则：`AGENTS.md`。工作流：`跨Agent协作方案.md`。下一刀：`CURRENT.md`。避坑：`经验手册.md`。
+
+- 产品：个人清单 + 日历 + 习惯 + 追番 + 番茄钟 + 统计；仅个人。
+- 架构：M1–M4 local-first（React + Dexie）；默认下一阶段 **M5**（以 CURRENT 为准）。
+- 禁栈：CRDT、Redux、过早后端、Ant Design / shadcn；不做可选 Tauri（除非用户点名）。
+- UI：只引用 `src/index.css` token；改界面先读 `design.md`，浅色/深色都验。
+- 收工：写 `开发日志.md`、更新 `CURRENT.md`；有坑写 `经验手册.md`；不主动 commit。
+- 进度勾选：`ROADMAP.md`；概念说明：`开发入门导读.md`。

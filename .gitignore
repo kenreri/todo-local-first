@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dev-dist
+dist-ssr
+*.local
+.env
+.env.*
+!.env.example
+todo-backup-*.json
+todo-tasks-*.csv
+
+# 本机发布工具和工作记录
+/.repo-tools/
+/artifacts/
+/.cursor/PLUGIN-SKILL盘点.md
+/.cursor/rules/sync-friendly-data.mdc
+/.cursor/rules/ui-colors.mdc
+/个人工作流与功能精简方案.md
+/看番任务交接.md
+/scripts/codex-migrate-utf8.mjs
+/scripts/fix-*
+/scripts/messages-m2.ts
+/scripts/write-*
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
