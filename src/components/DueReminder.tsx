@@ -1,7 +1,9 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
+import { useLocalDate } from "../hooks/useLocalDate";
 import { useEffect, useMemo, useState } from "react";
 import { Bell, ChevronRight, X } from "lucide-react";
 import { ui } from "../i18n/messages";
-import { todayKey } from "../lib/dates";
 import { buildDueReminderSummary } from "../lib/dueReminder";
 import { useTodoStore } from "../store/todoStore";
 
@@ -13,7 +15,7 @@ export function DueReminder() {
   const tasks = useTodoStore((s) => s.tasks);
   const view = useTodoStore((s) => s.view);
   const selectTask = useTodoStore((s) => s.selectTask);
-  const setView = useTodoStore((s) => s.setView);
+  const navigation = useViewNavigation();
   const t = ui(locale);
   const [dismissed, setDismissed] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -21,7 +23,7 @@ export function DueReminder() {
     NotificationPermission | "unsupported"
   >("default");
 
-  const today = todayKey();
+  const today = useLocalDate();
   const summary = useMemo(
     () => buildDueReminderSummary(tasks, today),
     [tasks, today],
@@ -75,6 +77,7 @@ export function DueReminder() {
 
   if (compact) {
     return (
+      <div className="min-w-0 space-y-2">
       <div
         role="status"
         className="flex min-w-0 items-center gap-2 rounded-[var(--radius-control)] border border-[var(--banner-due-border)] bg-[var(--banner-due)] px-3 py-2"
@@ -92,10 +95,11 @@ export function DueReminder() {
         </p>
         <button
           type="button"
+          disabled={navigation.saving}
           aria-expanded={view === "today" ? expanded : undefined}
           onClick={() => {
             if (view === "today") setExpanded(true);
-            else void setView("today");
+            else void navigation.navigate("today");
           }}
           className="inline-flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-sm font-medium text-[var(--accent)] hover:bg-[var(--hover)]"
         >
@@ -110,6 +114,8 @@ export function DueReminder() {
         >
           <X aria-hidden="true" className="size-4" />
         </button>
+      </div>
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
       </div>
     );
   }
@@ -132,7 +138,6 @@ export function DueReminder() {
                   onClick={() => {
                     selectTask(task.id);
                     setExpanded(false);
-                    void setView("today");
                   }}
                 >
                   {task.title}

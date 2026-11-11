@@ -1,10 +1,14 @@
 import { useEffect, useMemo, useRef } from "react";
+import { connectPomodoroRuntime } from "../lib/pomodoroCoordinator";
 import { ui } from "../i18n/messages";
 import { usePomodoroStore } from "../store/pomodoroStore";
 import { useTodoStore } from "../store/todoStore";
 import { formatPomodoroTime } from "../lib/pomodoro";
 
 export function PomodoroRuntimeBridge() {
+  useEffect(() => connectPomodoroRuntime(), []);
+  const saveError = usePomodoroStore((state) => state.saveError);
+  const skip = usePomodoroStore((state) => state.skip);
   const locale = useTodoStore((state) => state.locale);
   const tasks = useTodoStore((state) => state.tasks);
   const phase = usePomodoroStore((state) => state.phase);
@@ -50,5 +54,10 @@ export function PomodoroRuntimeBridge() {
     [],
   );
 
-  return null;
+  return saveError ? (
+    <div role="alert" className="fixed bottom-24 left-4 right-4 z-50 mx-auto max-w-xl rounded-[var(--radius-card)] border border-[var(--danger)] bg-[var(--bg-elevated)] p-4 text-[var(--ink)]">
+      <p>{locale === "zh" ? "专注记录保存失败，计时已暂停，记录仍可重试。" : "Could not save the focus session. The timer is paused; retry to save it."}</p>
+      <button type="button" className="ui-button-primary mt-2 px-3 py-2" onClick={() => void skip()}>{locale === "zh" ? "重试保存" : "Retry save"}</button>
+    </div>
+  ) : null;
 }

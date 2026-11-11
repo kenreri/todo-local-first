@@ -6,15 +6,22 @@ import { useAttachmentUrl } from "../hooks/useAttachmentUrl";
 import { captureWorkspaceItem } from "../lib/workspace";
 import { useTodoStore } from "../store/todoStore";
 import { workspaceError } from "../lib/workspace";
+import { usePendingPatch } from "../hooks/usePendingPatch";
+import { SaveStatus } from "./SaveStatus";
 
 const MUSIC_KEY = "workspace-focus-music";
 
 /** Stays mounted across views so music can accompany work in other tools. */
 export function FocusAmbience({ visible }: { visible: boolean }) {
-  const zh = useTodoStore((state) => state.locale) === "zh";
+  const locale = useTodoStore((state) => state.locale);
+  const zh = locale === "zh";
   const mascotEnabled = useTodoStore((state) => state.mascotEnabled);
   const setMascotEnabled = useTodoStore((state) => state.setMascotEnabled);
   const setView = useTodoStore((state) => state.setView);
+  const companion = usePendingPatch<{ enabled: boolean }>(async ({ enabled }) => {
+    if (enabled !== undefined) await setMascotEnabled(enabled);
+  });
+  const navigation = usePendingPatch<{ focus: boolean }>(async () => { await setView("pomodoro"); });
   const { attachments } = useWorkspace();
   const [selected, setSelected] = useState(() => {
     try {
@@ -144,15 +151,12 @@ export function FocusAmbience({ visible }: { visible: boolean }) {
         <label className="mt-4 flex min-h-10 items-center gap-2 text-sm">
           <input
             type="checkbox"
-            checked={mascotEnabled}
-            onChange={(event) => {
-              void setMascotEnabled(event.target.checked).catch((err) =>
-                setError(workspaceError(err, zh)),
-              );
-            }}
+            checked={companion.patch.enabled ?? mascotEnabled}
+            onChange={(event) => void companion.submit({ enabled: event.target.checked })}
           />
           {zh ? "让鲸鱼伙伴陪着我" : "Keep the whale companion nearby"}
         </label>
+        <SaveStatus locale={locale} saving={companion.saving} failed={companion.failed} onRetry={() => void companion.retry()} />
         {fileFailed ? (
           <p role="alert" className="mt-2 text-sm text-[var(--danger)]">
             {zh
@@ -167,10 +171,10 @@ export function FocusAmbience({ visible }: { visible: boolean }) {
         ) : null}
       </section>
       {playing && !visible ? (
-        <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-30 flex max-w-[calc(100%-2rem)] items-center gap-2 rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--nav-bg)] p-2 shadow-[var(--shadow-floating)] lg:bottom-4">
+        <div className="fixed bottom-[calc(5rem+env(safe-area-inset-bottom))] right-4 z-30 flex max-w-[calc(100%-2rem)] flex-wrap items-center gap-2 rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--nav-bg)] p-2 shadow-[var(--shadow-floating)] lg:bottom-4">
           <button
             type="button"
-            onClick={() => void setView("pomodoro")}
+            onClick={() => void navigation.submit({ focus: true })}
             className="flex min-h-10 min-w-0 items-center gap-2 px-2 text-sm"
           >
             <Headphones className="size-4 shrink-0" />
@@ -184,6 +188,7 @@ export function FocusAmbience({ visible }: { visible: boolean }) {
           >
             <Pause className="size-4" />
           </button>
+          <SaveStatus locale={locale} saving={navigation.saving} failed={navigation.failed} onRetry={() => void navigation.retry()} />
         </div>
       ) : null}
     </>

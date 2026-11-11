@@ -1,3 +1,7 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
+import { useLocalDate } from "../hooks/useLocalDate";
 import { useMemo } from "react";
 import {
   AlarmClock,
@@ -34,15 +38,20 @@ export function TodayView() {
   const checkIns = useTodoStore((state) => state.habitCheckIns);
   const anime = useTodoStore((state) => state.anime);
   const selectTask = useTodoStore((state) => state.selectTask);
-  const toggleTask = useTodoStore((state) => state.toggleTask);
-  const setHabitCheckIn = useTodoStore((state) => state.setHabitCheckIn);
-  const incrementAnimeEpisode = useTodoStore(
+  const persistToggleTask = useTodoStore((state) => state.toggleTask);
+  const persistSetHabitCheckIn = useTodoStore((state) => state.setHabitCheckIn);
+  const persistIncrementAnimeEpisode = useTodoStore(
     (state) => state.incrementAnimeEpisode,
   );
-  const setView = useTodoStore((state) => state.setView);
+  const navigation = useViewNavigation();
   const selectedTaskId = useTodoStore((state) => state.selectedTaskId);
   const t = ui(locale);
-  const today = todayKey();
+  const { run, failed } = useSaveFeedback();
+  const toggleTask = (...args: Parameters<typeof persistToggleTask>) => run(() => persistToggleTask(...args));
+  const setHabitCheckIn = (...args: Parameters<typeof persistSetHabitCheckIn>) => run(() => persistSetHabitCheckIn(...args));
+  const incrementAnimeEpisode = (...args: Parameters<typeof persistIncrementAnimeEpisode>) => run(() => persistIncrementAnimeEpisode(...args));
+
+  const today = useLocalDate();
 
   const buckets = useMemo(() => {
     const roots = tasks.filter((task) => task.parentId == null);
@@ -128,6 +137,8 @@ export function TodayView() {
   return (
     <section className="min-w-0 space-y-6">
       <PageHeader title={t.viewToday} description={dateLabel} />
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
+      {failed ? <p role="alert" className="text-sm text-[var(--danger)]">{t.taskSaveFailed}</p> : null}
 
       <div className="ui-card p-3"><QuickCapture /></div>
 
@@ -201,7 +212,7 @@ export function TodayView() {
                 {buckets.previous.map(item => (
                   <li key={item.virtualId} className="space-y-2">
                     <TodayTaskRow item={item} active={selectedTaskId === item.task.id}
-                      onSelect={() => selectTask(item.task.id)} onToggle={() => void toggleTask(item.task.id, item.task.repeatRule ? item.date : undefined)} />
+                      as="div" onSelect={() => selectTask(item.task.id)} onToggle={() => void toggleTask(item.task.id, item.task.repeatRule ? item.date : undefined)} />
                     <TaskScheduleControl task={item.task} compact />
                   </li>
                 ))}
@@ -237,7 +248,7 @@ export function TodayView() {
             <DashboardCardHeader
               title={t.habitToday}
               action={t.viewAll}
-              onClick={() => void setView("habits")}
+              disabled={navigation.saving} onClick={() => void navigation.navigate("habits")}
             />
             {scheduledHabits.length === 0 ? (
               <p className="mt-3 text-sm text-[var(--muted)]">
@@ -294,7 +305,7 @@ export function TodayView() {
             <DashboardCardHeader
               title={t.animeToday}
               action={t.viewAll}
-              onClick={() => void setView("anime")}
+              disabled={navigation.saving} onClick={() => void navigation.navigate("anime")}
             />
             {scheduledAnime.length === 0 ? (
               <p className="mt-3 text-sm text-[var(--muted)]">
@@ -333,7 +344,7 @@ export function TodayView() {
 
           <button
             type="button"
-            onClick={() => void setView("pomodoro")}
+            disabled={navigation.saving} onClick={() => void navigation.navigate("pomodoro")}
             className="ui-button-secondary inline-flex w-full items-center justify-center gap-2 px-4 py-3"
           >
             <Timer className="size-4 text-[var(--accent)]" />
@@ -346,11 +357,13 @@ export function TodayView() {
 }
 
 function TodayTaskRow({
+  as: Element = "li",
   item,
   active,
   onSelect,
   onToggle,
 }: {
+  as?: "li" | "div";
   item: TaskOccurrence;
   active: boolean;
   onSelect: () => void;
@@ -360,12 +373,12 @@ function TodayTaskRow({
   const t = ui(locale);
 
   return (
-    <li
+    <Element
       style={{
         borderLeftColor: priorityVar(normalizePriority(item.task.priority)),
       }}
       className={cn(
-        "flex items-start gap-3 rounded-[12px] border border-l-4 px-3 py-3",
+        "flex items-start gap-3 rounded-[var(--radius-small)] border border-l-4 px-3 py-3",
         active
           ? "border-[var(--accent)] bg-[var(--accent-soft)]"
           : "border-[var(--line)] bg-[var(--surface)]",
@@ -381,7 +394,7 @@ function TodayTaskRow({
         {item.task.completedAt ? <Check className="size-3.5" /> : null}
       </button>
       <button type="button" className="min-w-0 flex-1 text-left" onClick={onSelect}>
-        <div className="font-medium">{item.task.title}</div>
+        <div className="break-words font-medium">{item.task.title}</div>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-[var(--muted)]">
           <span>{planningLabel(item.date, locale)}{item.task.scheduledTime ? " · " + item.task.scheduledTime : ""}</span>
           {item.task.dueDate && item.task.dueDate <= todayKey() && !item.task.repeatRule ? <span className="text-[var(--danger)]">{t.optionalDeadline} {item.task.dueDate}</span> : null}
@@ -389,17 +402,19 @@ function TodayTaskRow({
           {item.task.repeatRule ? <span>{t.repeat}</span> : null}
         </div>
       </button>
-    </li>
+    </Element>
   );
 }
 
 function DashboardCardHeader({
   title,
   action,
+  disabled,
   onClick,
 }: {
   title: string;
   action: string;
+  disabled: boolean;
   onClick: () => void;
 }) {
   return (
@@ -407,6 +422,7 @@ function DashboardCardHeader({
       <h2 className="font-semibold text-[var(--ink)]">{title}</h2>
       <button
         type="button"
+        disabled={disabled}
         onClick={onClick}
         className="text-xs text-[var(--accent)] hover:underline"
       >

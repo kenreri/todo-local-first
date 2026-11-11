@@ -3,6 +3,8 @@ import { useState } from 'react'
 import { todayKey, addDays } from '../lib/dates'
 import { ui } from '../i18n/messages'
 import { useTodoStore } from '../store/todoStore'
+import { useSaveFeedback } from '../hooks/useSaveFeedback'
+import { useLocalDate } from '../hooks/useLocalDate'
 
 export function BatchBar() {
   const locale = useTodoStore((s) => s.locale)
@@ -13,49 +15,53 @@ export function BatchBar() {
   const batchDelete = useTodoStore((s) => s.batchDelete)
   const batchMove = useTodoStore((s) => s.batchMove)
   const batchSchedule = useTodoStore((s) => s.batchSchedule)
+  const today = useLocalDate()
   const [later, setLater] = useState(false)
   const [date, setDate] = useState(addDays(todayKey(), 1))
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState(false)
+  const [moveTarget, setMoveTarget] = useState('')
+  const { run, saving, failed } = useSaveFeedback()
   const schedule = async (value: string | null) => {
-    setSaving(true)
-    setError(false)
-    try { await batchSchedule(checkedIds, value); setLater(false) }
-    catch { setError(true) }
-    finally { setSaving(false) }
+    if (await run(() => batchSchedule(checkedIds, value))) setLater(false)
+  }
+  const move = async (listId: string) => {
+    setMoveTarget(listId)
+    if (await run(() => batchMove(checkedIds, listId))) setMoveTarget('')
   }
   const t = ui(locale)
 
   if (checkedIds.length === 0) return null
 
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2">
+    <div aria-busy={saving} className="flex flex-wrap items-center gap-2 rounded-2xl border border-[var(--accent)] bg-[var(--accent-soft)] px-3 py-2">
       <span className="text-sm font-medium">
         {t.selectedCount.replace('{n}', String(checkedIds.length))}
       </span>
       <button
         type="button"
+        disabled={saving}
         className="inline-flex items-center gap-1 rounded-xl bg-[var(--accent)] px-3 py-1.5 text-sm text-[var(--on-accent)]"
-        onClick={() => void batchComplete(checkedIds, true)}
+        onClick={() => void run(() => batchComplete(checkedIds, true))}
       >
         <CheckCheck className="size-3.5" />
         {t.batchComplete}
       </button>
       <button
         type="button"
+        disabled={saving}
         className="inline-flex items-center gap-1 rounded-xl border border-[var(--line)] bg-[var(--bg-elevated)] px-3 py-1.5 text-sm"
-        onClick={() => void batchComplete(checkedIds, false)}
+        onClick={() => void run(() => batchComplete(checkedIds, false))}
       >
         {t.batchReopen}
       </button>
       <select
         className="rounded-xl border border-[var(--line)] bg-[var(--bg-elevated)] px-2 py-1.5 text-sm outline-none"
-        defaultValue=""
+        aria-label={t.batchMove}
+        disabled={saving}
+        value={moveTarget}
         onChange={(e) => {
           const listId = e.target.value
           if (!listId) return
-          void batchMove(checkedIds, listId)
-          e.currentTarget.value = ''
+          void move(listId)
         }}
       >
         <option value="" disabled>
@@ -67,23 +73,27 @@ export function BatchBar() {
           </option>
         ))}
       </select>
+      {failed && moveTarget ? <button type="button" disabled={saving} className="ui-button-secondary min-h-10 px-3 py-2 text-sm" onClick={() => void move(moveTarget)}>{locale === 'zh' ? '重试移动' : 'Retry move'}</button> : null}
       <button
         type="button"
+        disabled={saving}
         className="inline-flex items-center gap-1 rounded-xl px-3 py-1.5 text-sm text-[var(--danger)]"
         onClick={() => {
-          if (window.confirm(t.batchDeleteConfirm)) void batchDelete(checkedIds)
+          if (window.confirm(t.batchDeleteConfirm)) void run(() => batchDelete(checkedIds))
         }}
       >
         <Trash2 className="size-3.5" />
         {t.delete}
       </button>
-      <button type="button" disabled={saving} className="ui-button-secondary min-h-10 px-3 py-2 text-sm" onClick={() => void schedule(todayKey())}>{t.addToToday}</button>
+      <button type="button" disabled={saving} className="ui-button-secondary min-h-10 px-3 py-2 text-sm" onClick={() => void schedule(today)}>{t.addToToday}</button>
       <button type="button" disabled={saving} className="ui-button-secondary min-h-10 px-3 py-2 text-sm" onClick={() => void schedule(null)}>{t.unscheduled}</button>
       <button type="button" disabled={saving} aria-expanded={later} className="ui-button-secondary min-h-10 px-3 py-2 text-sm" onClick={() => setLater(!later)}>{t.doLater}</button>
-      {later ? <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm">{t.pickWorkDay}<input type="date" min={addDays(todayKey(), 1)} value={date} onChange={e => setDate(e.target.value)} onBlur={e => setDate(e.target.value)} className="ui-input min-w-0 px-2 py-2" /><button type="button" disabled={saving || !date} className="ui-button-secondary px-3 py-2" onClick={() => void schedule(date)}>{t.save}</button></label> : null}
-      {error ? <p role="alert" className="text-sm text-[var(--danger)]">{t.taskSaveFailed}</p> : null}
+      {later ? <label className="flex min-w-0 flex-wrap items-center gap-2 text-sm">{t.pickWorkDay}<input type="date" disabled={saving} min={addDays(today, 1)} value={date} onChange={e => setDate(e.target.value)} onBlur={e => setDate(e.target.value)} className="ui-input min-w-0 px-2 py-2" /><button type="button" disabled={saving || !date || date <= today} className="ui-button-secondary px-3 py-2" onClick={() => void schedule(date)}>{t.save}</button></label> : null}
+      {saving ? <p role="status" className="text-sm text-[var(--muted)]">{t.taskSaving}</p> : null}
+      {failed ? <p role="alert" className="text-sm text-[var(--danger)]">{t.taskSaveFailed}</p> : null}
       <button
         type="button"
+        disabled={saving}
         className="ml-auto rounded-xl px-3 py-1.5 text-sm text-[var(--muted)]"
         onClick={() => clearChecked()}
       >

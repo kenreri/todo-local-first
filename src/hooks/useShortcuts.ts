@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
+import { useSaveFeedback } from "./useSaveFeedback";
 import type { AppView } from "../types";
 import { useTodoStore } from "../store/todoStore";
 
@@ -28,6 +29,14 @@ function focusAfterViewChange(shortcut: "create" | "search") {
 }
 
 export function useShortcuts() {
+  const feedback = useSaveFeedback();
+  const { run } = feedback;
+  const failedOperation = useRef<(() => Promise<unknown>) | null>(null);
+  const act = useCallback((operation: () => Promise<unknown>) => run(async () => {
+    failedOperation.current = operation;
+    await operation();
+    failedOperation.current = null;
+  }), [run]);
   const setView = useTodoStore((s) => s.setView);
   const view = useTodoStore((s) => s.view);
   const theme = useTodoStore((s) => s.theme);
@@ -41,7 +50,7 @@ export function useShortcuts() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (document.querySelector("dialog[open]")) return;
+      if (event.defaultPrevented || event.isComposing || event.keyCode === 229 || document.querySelector('dialog[open], [role="dialog"][aria-modal="true"]')) return;
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
       const typing =
@@ -64,53 +73,56 @@ export function useShortcuts() {
           event.key.toLowerCase() === "enter"
         ) {
           event.preventDefault();
-          if (checkedIds.length > 0) void batchComplete(checkedIds, true);
-          else if (selectedTaskId) void toggleTask(selectedTaskId);
+          if (checkedIds.length > 0) void act(() => batchComplete(checkedIds, true));
+          else if (selectedTaskId) void act(() => toggleTask(selectedTaskId));
         }
         return;
       }
 
       if (event.key >= "1" && event.key <= "6") {
         const view = VIEW_KEYS[Number(event.key) - 1];
-        if (view) void setView(view);
+        if (view) void act(() => setView(view));
         return;
       }
 
       if (event.key.toLowerCase() === "b" && ["lists", "list", "calendar"].includes(view)) {
         event.preventDefault();
-        if (view === "calendar") {
-          useTodoStore.getState().selectList(null);
-          useTodoStore.getState().setSearch("");
-          useTodoStore.getState().setFilter("all");
-        }
-        void setView(view === "calendar" ? "list" : "calendar");
+        void act(async () => {
+          await setView(view === "calendar" ? "list" : "calendar");
+          if (view === "calendar") {
+            useTodoStore.getState().selectList(null);
+            useTodoStore.getState().setSearch("");
+            useTodoStore.getState().setFilter("all");
+          }
+        });
         return;
       }
 
       if (event.key.toLowerCase() === "d") {
         const order = ["light", "dark", "system"] as const;
         const idx = order.indexOf(theme);
-        void setTheme(order[(idx + 1) % order.length]);
+        void act(() => setTheme(order[(idx + 1) % order.length]));
         return;
       }
 
       if (event.key === "/") {
         event.preventDefault();
         if (focusShortcutInput("search")) return;
-        void setView("list").then(() => focusAfterViewChange("search"));
+        void act(async () => { await setView("list"); focusAfterViewChange("search"); });
         return;
       }
 
       if (event.key.toLowerCase() === "n") {
         event.preventDefault();
         if (focusShortcutInput("create")) return;
-        void setView("workspace").then(() => focusAfterViewChange("create"));
+        void act(async () => { await setView("workspace"); focusAfterViewChange("create"); });
       }
     };
 
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
+    act,
     setView,
     view,
     theme,
@@ -122,4 +134,5 @@ export function useShortcuts() {
     toggleTask,
     batchComplete,
   ]);
+  return { ...feedback, retry: () => { if (failedOperation.current) void act(failedOperation.current); } };
 }

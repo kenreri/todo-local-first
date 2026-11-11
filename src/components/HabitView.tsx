@@ -1,3 +1,5 @@
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
+import { useLocalDate } from "../hooks/useLocalDate";
 import {
   Check,
   Edit3,
@@ -9,9 +11,9 @@ import {
 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { ui } from "../i18n/messages";
-import { todayKey } from "../lib/dates";
 import {
   calculateHabitStats,
+  habitEditPatch,
   getHabitCheckIn,
   isHabitScheduled,
 } from "../lib/habits";
@@ -39,17 +41,25 @@ export function HabitView() {
   const locale = useTodoStore((state) => state.locale);
   const habits = useTodoStore((state) => state.habits);
   const checkIns = useTodoStore((state) => state.habitCheckIns);
-  const createHabit = useTodoStore((state) => state.createHabit);
-  const updateHabit = useTodoStore((state) => state.updateHabit);
-  const deleteHabit = useTodoStore((state) => state.deleteHabit);
-  const setHabitCheckIn = useTodoStore((state) => state.setHabitCheckIn);
+  const persistCreateHabit = useTodoStore((state) => state.createHabit);
+  const persistUpdateHabit = useTodoStore((state) => state.updateHabit);
+  const persistDeleteHabit = useTodoStore((state) => state.deleteHabit);
+  const persistSetHabitCheckIn = useTodoStore((state) => state.setHabitCheckIn);
   const t = ui(locale);
-  const today = todayKey();
-  const [selectedDate, setSelectedDate] = useState(today);
+  const { run, saving, failed } = useSaveFeedback();
+  const createHabit = (...args: Parameters<typeof persistCreateHabit>) => run(() => persistCreateHabit(...args));
+  const updateHabit = (...args: Parameters<typeof persistUpdateHabit>) => run(() => persistUpdateHabit(...args));
+  const deleteHabit = (...args: Parameters<typeof persistDeleteHabit>) => run(() => persistDeleteHabit(...args));
+  const setHabitCheckIn = (...args: Parameters<typeof persistSetHabitCheckIn>) => run(() => persistSetHabitCheckIn(...args));
+
+  const today = useLocalDate();
+  const [dateOverride, setSelectedDate] = useState<string | null>(null);
+  const selectedDate = dateOverride ?? today;
   const [formOpen, setFormOpen] = useState(false);
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<HabitFormState>(emptyForm);
+  const [baseline, setBaseline] = useState<HabitFormState>(emptyForm);
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
   >(() => ("Notification" in window ? Notification.permission : "unsupported"));
@@ -60,26 +70,32 @@ export function HabitView() {
   );
 
   const openCreate = () => {
+    if (saving) return;
     setEditingId(null);
+    setBaseline(emptyForm);
     setForm({ ...emptyForm });
     setFormOpen(true);
   };
 
   const openEdit = (habit: HabitRecord) => {
+    if (saving) return;
     setEditingId(habit.id);
-    setForm({
+    const next = {
       title: habit.title,
       emoji: habit.emoji,
       frequency: habit.frequency,
-      weekdays: [...(habit.weekdays ?? [])],
+      weekdays: [...habit.weekdays],
       reminderTime: habit.reminderTime ?? "",
-    });
+    };
+    setBaseline(next);
+    setForm(next);
     setFormOpen(true);
   };
 
   const closeForm = () => {
     setFormOpen(false);
     setEditingId(null);
+    setBaseline(emptyForm);
     setForm({ ...emptyForm });
   };
 
@@ -91,13 +107,15 @@ export function HabitView() {
       ...form,
       reminderTime: form.reminderTime || null,
     };
-    if (editingId) await updateHabit(editingId, payload);
-    else await createHabit(payload);
-    closeForm();
+    const saved = editingId
+      ? await updateHabit(editingId, habitEditPatch({ ...baseline, reminderTime: baseline.reminderTime || null }, payload))
+      : await createHabit(payload);
+    if (saved) closeForm();
   };
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6" aria-busy={saving}>
+      {failed ? <p role="alert" className="ui-card-flat p-3 text-sm text-[var(--danger)]">{locale === "zh" ? "操作未保存，请重试。编辑内容已保留。" : "Could not save. Your edits are kept; please retry."}</p> : null}
       <PageHeader
         title={t.habitTitle}
         description={t.habitSubtitle}
@@ -139,7 +157,8 @@ export function HabitView() {
           editing={editingId != null}
           locale={locale}
           onChange={setForm}
-          onCancel={closeForm}
+          onCancel={() => { if (!saving) closeForm(); }}
+          saving={saving}
           onSubmit={submit}
         />
       ) : null}
@@ -162,7 +181,7 @@ export function HabitView() {
               className="ui-input px-3 py-2"
               value={selectedDate}
               max={today}
-              onChange={(event) => setSelectedDate(event.target.value || today)}
+              onChange={(event) => setSelectedDate(event.target.value === today ? null : event.target.value || null)}
             />
           </label>
           </details>
@@ -294,7 +313,7 @@ export function HabitView() {
                         aria-label={deletePendingId === habit.id ? t.confirmDeleteAction : t.deleteHabit}
                         className="rounded-[var(--radius-control)] p-2 text-[var(--danger)] hover:bg-[var(--danger-soft)]"
                         onClick={() => {
-                          if (deletePendingId === habit.id) { void deleteHabit(habit.id); setDeletePendingId(null); }
+                          if (deletePendingId === habit.id) { void deleteHabit(habit.id).then(saved => { if (saved) setDeletePendingId(null); }); }
                           else setDeletePendingId(habit.id);
                         }}
                       >
@@ -336,12 +355,14 @@ function HabitForm({
   onChange,
   onCancel,
   onSubmit,
+  saving,
 }: {
   form: HabitFormState;
   editing: boolean;
   locale: "zh" | "en";
   onChange: (next: HabitFormState) => void;
   onCancel: () => void;
+  saving: boolean;
   onSubmit: (event: FormEvent) => void;
 }) {
   const t = ui(locale);
@@ -350,6 +371,7 @@ function HabitForm({
       className="ui-card p-5 md:p-6"
       onSubmit={onSubmit}
     >
+      <fieldset disabled={saving}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-lg font-semibold text-[var(--ink)]">
           {editing ? t.editHabit : t.newHabit}
@@ -471,6 +493,7 @@ function HabitForm({
           {t.saveHabit}
         </button>
       </div>
+      </fieldset>
     </form>
   );
 }

@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   BarChart3,
   Cat,
@@ -25,7 +26,11 @@ import { ui } from "../i18n/messages";
 import { cn } from "../lib/cn";
 import { MASCOT_SCALE_MAX, MASCOT_SCALE_MIN } from "../lib/mascot";
 import { useTodoStore } from "../store/todoStore";
-import type { AppView, ThemeMode } from "../types";
+import type { AppView, SettingsRecord } from "../types";
+import { coerceTheme } from "../lib/appView";
+import { updateSettings } from "../lib/settings";
+import { usePendingPatch } from "../hooks/usePendingPatch";
+import { SaveStatus } from "./SaveStatus";
 import { BackupPanel } from "./BackupPanel";
 import { FocusStatusIndicator } from "./FocusStatusIndicator";
 import { ViewTabs } from "./ViewTabs";
@@ -43,10 +48,17 @@ export function AppNavigation() {
   );
   const t = ui(locale);
   const setView = useTodoStore((state) => state.setView);
+  const sidebarSave = usePendingPatch<{ collapsed: boolean }>(async ({ collapsed }) => {
+    if (collapsed !== undefined) await setSidebarCollapsed(collapsed);
+  });
+  const navigation = usePendingPatch<{ view: AppView }>(async ({ view }) => {
+    if (view !== undefined) await setView(view);
+  });
+  const appearance = usePendingPatch<AppearanceSettings>(updateSettings);
 
   // Global capture always opens the inbox.
   const openQuickCapture = async () => {
-    await setView("workspace");
+    if (!(await navigation.submit({ view: "workspace" }))) return;
     setMobileOpen(false);
     window.setTimeout(() => {
       document
@@ -65,16 +77,18 @@ export function AppNavigation() {
       >
         {sidebarCollapsed ? (
           <CollapsedRail
-            onExpand={() => void setSidebarCollapsed(false)}
+            onExpand={() => void sidebarSave.submit({ collapsed: false })}
             onOpenSettings={() => {
-              setAutoOpenSettings(true);
-              void setSidebarCollapsed(false);
+              void sidebarSave.submit({ collapsed: false }).then((saved) => {
+                if (saved) setAutoOpenSettings(true);
+              });
             }}
           />
         ) : (
           <NavigationContent
+            appearance={appearance}
             onQuickCapture={openQuickCapture}
-            onCollapse={() => void setSidebarCollapsed(true)}
+            onCollapse={() => void sidebarSave.submit({ collapsed: true })}
             autoOpenSettings={autoOpenSettings}
             onSettingsAutoOpened={() => setAutoOpenSettings(false)}
           />
@@ -124,6 +138,7 @@ export function AppNavigation() {
             </button>
           </div>
           <NavigationContent
+            appearance={appearance}
             onQuickCapture={openQuickCapture}
             onNavigate={() => setMobileOpen(false)}
             settingsId="mobile"
@@ -132,11 +147,19 @@ export function AppNavigation() {
       ) : null}
 
       <MobileBar onMore={() => setMobileOpen(true)} />
+      {sidebarSave.failed || navigation.failed || appearance.failed ? (
+        <div className="fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-50 max-w-[calc(100%-2rem)] rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--bg-elevated)] p-3 shadow-[var(--shadow-floating)] lg:bottom-4">
+          <SaveStatus locale={locale} saving={sidebarSave.saving || navigation.saving || appearance.saving}
+            failed={sidebarSave.failed || navigation.failed || appearance.failed}
+            onRetry={() => { void sidebarSave.retry(); void navigation.retry(); void appearance.retry(); }} />
+        </div>
+      ) : null}
     </>
   );
 }
 
 function NavigationContent({
+  appearance,
   onQuickCapture,
   onNavigate,
   onCollapse,
@@ -144,6 +167,7 @@ function NavigationContent({
   onSettingsAutoOpened,
   settingsId = "desktop",
 }: {
+  appearance: AppearanceSave;
   onQuickCapture: () => Promise<void>;
   onNavigate?: () => void;
   onCollapse?: () => void;
@@ -186,6 +210,7 @@ function NavigationContent({
       </div>
       <FocusStatusIndicator />
       <SettingsPanel
+        save={appearance}
         idSuffix={settingsId}
         autoOpen={autoOpenSettings}
         onAutoOpened={onSettingsAutoOpened}
@@ -205,6 +230,9 @@ function CollapsedRail({
   const view = useTodoStore((state) => state.view);
   const setView = useTodoStore((state) => state.setView);
   const t = ui(locale);
+  const navigation = usePendingPatch<{ view: AppView }>(async ({ view }) => {
+    if (view !== undefined) await setView(view);
+  });
 
   // 窄条态：Logo 当「展开并跳到今天页」按钮；下面是一列主导航图标，
   // 点图标 = 展开 + 跳到对应页面。没有浮层。
@@ -242,7 +270,7 @@ function CollapsedRail({
               key={item.view}
               type="button"
               onClick={() => {
-                void setView(item.view === "lists" ? "list" : item.view);
+                void navigation.submit({ view: item.view === "lists" ? "list" : item.view });
               }}
               aria-label={item.label}
               title={item.label}
@@ -258,6 +286,9 @@ function CollapsedRail({
           );
         })}
       </div>
+      {navigation.failed ? createPortal(<div className="fixed bottom-4 left-16 z-50 w-64 max-w-[calc(100vw-5rem)] rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--bg-elevated)] p-3 shadow-[var(--shadow-floating)]">
+        <SaveStatus locale={locale} saving={navigation.saving} failed onRetry={() => void navigation.retry()} />
+      </div>, document.body) : null}
       <FocusStatusIndicator compact />
       {/* 底部设置入口：展开并自动打开设置弹层 */}
       <button
@@ -294,11 +325,18 @@ function Brand({ compact = false }: { compact?: boolean }) {
   );
 }
 
+type AppearanceSettings = Pick<SettingsRecord,
+  "theme" | "locale" | "sakuraEnabled" | "wallpaperEnabled" | "wallpaperUrl" | "wallpaperDim" | "mascotEnabled" | "mascotScale"
+>;
+type AppearanceSave = ReturnType<typeof usePendingPatch<AppearanceSettings>>;
+
 function SettingsPanel({
+  save,
   idSuffix,
   autoOpen,
   onAutoOpened,
 }: {
+  save: AppearanceSave;
   idSuffix: string;
   autoOpen?: boolean;
   onAutoOpened?: () => void;
@@ -306,32 +344,41 @@ function SettingsPanel({
   const [open, setOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const locale = useTodoStore((state) => state.locale);
-  const setLocale = useTodoStore((state) => state.setLocale);
   const theme = useTodoStore((state) => state.theme);
-  const setTheme = useTodoStore((state) => state.setTheme);
   const sakuraEnabled = useTodoStore((state) => state.sakuraEnabled);
-  const setSakuraEnabled = useTodoStore((state) => state.setSakuraEnabled);
   const wallpaperEnabled = useTodoStore((state) => state.wallpaperEnabled);
-  const setWallpaperEnabled = useTodoStore(
-    (state) => state.setWallpaperEnabled,
-  );
   const wallpaperUrl = useTodoStore((state) => state.wallpaperUrl);
-  const setWallpaperUrl = useTodoStore((state) => state.setWallpaperUrl);
   const wallpaperDim = useTodoStore((state) => state.wallpaperDim);
-  const setWallpaperDim = useTodoStore((state) => state.setWallpaperDim);
   const mascotEnabled = useTodoStore((state) => state.mascotEnabled);
-  const setMascotEnabled = useTodoStore((state) => state.setMascotEnabled);
   const mascotScale = useTodoStore((state) => state.mascotScale);
-  const setMascotScale = useTodoStore((state) => state.setMascotScale);
-  const [dimDraft, setDimDraft] = useState(wallpaperDim);
+  const [dimDraft, setDimDraft] = useState<number | null>(null);
+  const [urlDraft, setUrlDraft] = useState<string | null>(null);
+  const dimRef = useRef<number | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const inputRevision = useRef(0);
   const t = ui(locale);
+  const shownWallpaper = save.patch.wallpaperEnabled ?? wallpaperEnabled;
+  const shownMascot = save.patch.mascotEnabled ?? mascotEnabled;
+  const shownDim = dimDraft ?? save.patch.wallpaperDim ?? wallpaperDim;
+  const shownScale = save.patch.mascotScale ?? mascotScale;
+  const submitAppearance = save.submit;
 
-  // 打开面板时同步草稿值；拖动只改草稿，松手/离开才落库
-  useEffect(() => {
-    if (open) setDimDraft(wallpaperDim);
-  }, [open, wallpaperDim]);
+  // Reading the refs also commits an input when an outside pointer closes the panel before blur.
+  const commitInputs = useCallback(() => {
+    const patch: Partial<AppearanceSettings> = {};
+    if (urlRef.current !== null) patch.wallpaperUrl = urlRef.current.trim();
+    if (dimRef.current !== null) patch.wallpaperDim = dimRef.current;
+    urlRef.current = null;
+    dimRef.current = null;
+    setUrlDraft(null);
+    setDimDraft(null);
+    return submitAppearance(patch);
+  }, [submitAppearance]);
+  const close = useCallback(async () => {
+    const requestedRevision = inputRevision.current;
+    if (await commitInputs() && inputRevision.current === requestedRevision) setOpen(false);
+  }, [commitInputs]);
 
-  // 一次性 autoOpen 触发：父级（窄条态点设置按钮）要求自动打开
   useEffect(() => {
     if (autoOpen && !open) {
       setOpen(true);
@@ -342,10 +389,13 @@ function SettingsPanel({
   useEffect(() => {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!panelRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!panelRef.current?.contains(event.target as Node)) void close();
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        void close();
+      }
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -353,196 +403,85 @@ function SettingsPanel({
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [open, close]);
 
   return (
-    <div
-      ref={panelRef}
-      className="relative mt-4 border-t border-[var(--line)] pt-3"
-    >
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={`settings-panel-${idSuffix}`}
-        onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--ink)]"
-      >
-        <Settings className="size-4" />
-        {t.settings}
+    <div ref={panelRef} className="relative mt-4 border-t border-[var(--line)] pt-3">
+      <button type="button" aria-expanded={open} aria-controls={`settings-panel-${idSuffix}`}
+        onClick={() => { if (open) void close(); else setOpen(true); }}
+        className="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-sm text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--ink)]">
+        <Settings className="size-4" />{t.settings}
       </button>
       {open ? (
-        <div
-          id={`settings-panel-${idSuffix}`}
-          role="dialog"
-          aria-label={t.settings}
-          className="absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[min(70vh,520px)] space-y-3 overflow-y-auto rounded-[var(--radius-card)] border border-[var(--line)] bg-[var(--bg-elevated)] p-4 shadow-[var(--shadow-floating)]"
-        >
+        <div id={`settings-panel-${idSuffix}`} role="dialog" aria-label={t.settings}
+          className="absolute right-0 bottom-full left-0 z-20 mb-2 max-h-[min(70vh,520px)] space-y-3 overflow-y-auto rounded-[var(--radius-card)] border border-[var(--line)] bg-[var(--bg-elevated)] p-4 shadow-[var(--shadow-floating)]">
           <div className="flex items-center justify-between gap-2">
-            <div className="text-sm font-medium text-[var(--ink)]">
-              {t.settings}
-            </div>
-            <button
-              type="button"
-              aria-label={t.closeSettings}
-              onClick={() => setOpen(false)}
-              className="grid size-7 place-items-center rounded-lg text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--ink)]"
-            >
-              <X className="size-3.5" />
-            </button>
+            <div className="text-sm font-medium text-[var(--ink)]">{t.settings}</div>
+            <button type="button" aria-label={t.closeSettings} onClick={() => void close()}
+              className="grid size-10 place-items-center rounded-lg text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--ink)]"><X className="size-4" /></button>
           </div>
+          <SaveStatus locale={locale} saving={save.saving} failed={save.failed} onRetry={() => void commitInputs()} showSaved={urlDraft === null && dimDraft === null} />
           <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            {theme === "dark" ? (
-              <Moon className="size-4" />
-            ) : (
-              <Sun className="size-4" />
-            )}
-            <span className="w-12">{t.theme}</span>
-            <select
-              id={`theme-${idSuffix}`}
-              className="min-w-0 flex-1 rounded-lg border border-[var(--line)] px-2 py-1.5 text-sm outline-none"
-              value={theme}
-              onChange={(event) =>
-                void setTheme(event.target.value as ThemeMode)
-              }
-            >
-              <option value="light">{t.themeLight}</option>
-              <option value="dark">{t.themeDark}</option>
-              <option value="system">{t.themeSystem}</option>
+            {(save.patch.theme ?? theme) === "dark" ? <Moon className="size-4 shrink-0" /> : <Sun className="size-4 shrink-0" />}
+            <span className="min-w-12 max-w-16 shrink-0">{t.theme}</span>
+            <select id={`theme-${idSuffix}`} className="ui-input min-h-10 min-w-0 flex-1 px-1 text-sm"
+              value={save.patch.theme ?? theme} onChange={(event) => void save.submit({ theme: coerceTheme(event.target.value) })}>
+              <option value="light">{t.themeLight}</option><option value="dark">{t.themeDark}</option><option value="system">{t.themeSystem}</option>
             </select>
           </label>
           <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            <Flower2 className="size-4" />
-            <span className="w-12">{t.sakuraEffect}</span>
-            <select
-              id={`sakura-${idSuffix}`}
-              className="min-w-0 flex-1 rounded-lg border border-[var(--line)] px-2 py-1.5 text-sm outline-none"
-              value={sakuraEnabled ? "on" : "off"}
-              onChange={(event) =>
-                void setSakuraEnabled(event.target.value === "on")
-              }
-            >
-              <option value="on">{t.effectOn}</option>
-              <option value="off">{t.effectOff}</option>
+            <Flower2 className="size-4 shrink-0" /><span className="min-w-12 max-w-16 shrink-0">{t.sakuraEffect}</span>
+            <select id={`sakura-${idSuffix}`} className="ui-input min-h-10 min-w-0 flex-1 px-1 text-sm"
+              value={(save.patch.sakuraEnabled ?? sakuraEnabled) ? "on" : "off"} onChange={(event) => void save.submit({ sakuraEnabled: event.target.value === "on" })}>
+              <option value="on">{t.effectOn}</option><option value="off">{t.effectOff}</option>
             </select>
           </label>
           <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            <ImageIcon className="size-4" />
-            <span className="w-12">{t.wallpaper}</span>
-            <select
-              id={`wallpaper-${idSuffix}`}
-              className="min-w-0 flex-1 rounded-lg border border-[var(--line)] px-2 py-1.5 text-sm outline-none"
-              value={wallpaperEnabled ? "on" : "off"}
-              onChange={(event) =>
-                void setWallpaperEnabled(event.target.value === "on")
-              }
-            >
-              <option value="on">{t.effectOn}</option>
-              <option value="off">{t.effectOff}</option>
+            <ImageIcon className="size-4 shrink-0" /><span className="min-w-12 max-w-16 shrink-0">{t.wallpaper}</span>
+            <select id={`wallpaper-${idSuffix}`} className="ui-input min-h-10 min-w-0 flex-1 px-1 text-sm"
+              value={shownWallpaper ? "on" : "off"} onChange={(event) => void save.submit({ wallpaperEnabled: event.target.value === "on" })}>
+              <option value="on">{t.effectOn}</option><option value="off">{t.effectOff}</option>
             </select>
           </label>
-          {wallpaperEnabled ? (
-            <>
-              <label className="grid gap-1.5 text-xs text-[var(--muted)]">
-                {t.wallpaperSource}
-                <input
-                  type="url"
-                  defaultValue={wallpaperUrl}
-                  placeholder={t.wallpaperSourcePlaceholder}
-                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-2 py-1.5 text-xs text-[var(--ink)] outline-none focus:border-[var(--accent)]"
-                  onBlur={(event) =>
-                    void setWallpaperUrl(event.target.value.trim())
-                  }
-                />
-              </label>
-              <label className="grid gap-1.5 text-xs text-[var(--muted)]">
-                <span className="flex items-center justify-between">
-                  <span>{t.wallpaperDim}</span>
-                  <span className="tabular-nums opacity-80">{dimDraft}</span>
-                </span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  step={5}
-                  className="ui-range"
-                  value={dimDraft}
-                  onChange={(event) => setDimDraft(Number(event.target.value))}
-                  onPointerUp={() => {
-                    if (dimDraft !== wallpaperDim)
-                      void setWallpaperDim(dimDraft);
-                  }}
-                  onKeyUp={() => {
-                    if (dimDraft !== wallpaperDim)
-                      void setWallpaperDim(dimDraft);
-                  }}
-                  onBlur={() => {
-                    if (dimDraft !== wallpaperDim)
-                      void setWallpaperDim(dimDraft);
-                  }}
-                />
-              </label>
-            </>
-          ) : null}
-          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            <Cat className="size-4" />
-            <span className="w-12">{t.mascot}</span>
-            <select
-              id={`mascot-${idSuffix}`}
-              className="min-w-0 flex-1 rounded-lg border border-[var(--line)] px-2 py-1.5 text-sm outline-none"
-              value={mascotEnabled ? "on" : "off"}
-              onChange={(event) =>
-                void setMascotEnabled(event.target.value === "on")
-              }
-            >
-              <option value="on">{t.effectOn}</option>
-              <option value="off">{t.effectOff}</option>
-            </select>
-          </label>
-          {mascotEnabled ? (
+          {shownWallpaper ? <>
             <label className="grid gap-1.5 text-xs text-[var(--muted)]">
-              <span className="flex items-center justify-between">
-                <span>{t.mascotSize}</span>
-                <span className="tabular-nums opacity-80">
-                  {mascotScale.toFixed(1)}
-                </span>
-              </span>
-              <input
-                type="range"
-                min={MASCOT_SCALE_MIN}
-                max={MASCOT_SCALE_MAX}
-                step={0.1}
-                className="ui-range"
-                value={mascotScale}
-                onChange={(event) =>
-                  void setMascotScale(Number(event.target.value))
-                }
-              />
+              {t.wallpaperSource}
+              <input type="url" value={urlDraft ?? save.patch.wallpaperUrl ?? wallpaperUrl} placeholder={t.wallpaperSourcePlaceholder}
+                className="ui-input min-h-10 w-full px-2 text-xs"
+                onChange={(event) => { inputRevision.current++; urlRef.current = event.target.value; setUrlDraft(event.target.value); }}
+                onBlur={() => { if (urlRef.current !== null) void commitInputs(); }} />
             </label>
-          ) : null}
+            <label className="grid gap-1.5 text-xs text-[var(--muted)]">
+              <span className="flex items-center justify-between"><span>{t.wallpaperDim}</span><span className="tabular-nums opacity-80">{shownDim}</span></span>
+              <input type="range" min={0} max={100} step={5} className="ui-range" value={shownDim}
+                onChange={(event) => { inputRevision.current++; dimRef.current = Number(event.target.value); setDimDraft(dimRef.current); }}
+                onPointerUp={() => { if (dimRef.current !== null) void commitInputs(); }}
+                onKeyUp={() => { if (dimRef.current !== null) void commitInputs(); }}
+                onBlur={() => { if (dimRef.current !== null) void commitInputs(); }} />
+            </label>
+          </> : null}
           <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
-            <Languages className="size-4" />
-            <span className="w-12">{t.language}</span>
-            <select
-              id={`locale-${idSuffix}`}
-              className="min-w-0 flex-1 rounded-lg border border-[var(--line)] px-2 py-1.5 text-sm outline-none"
-              value={locale}
-              onChange={(event) =>
-                void setLocale(event.target.value as "zh" | "en")
-              }
-            >
-              <option value="zh">{t.chinese}</option>
-              <option value="en">{t.english}</option>
+            <Cat className="size-4 shrink-0" /><span className="min-w-12 max-w-16 shrink-0">{t.mascot}</span>
+            <select id={`mascot-${idSuffix}`} className="ui-input min-h-10 min-w-0 flex-1 px-1 text-sm"
+              value={shownMascot ? "on" : "off"} onChange={(event) => void save.submit({ mascotEnabled: event.target.value === "on" })}>
+              <option value="on">{t.effectOn}</option><option value="off">{t.effectOff}</option>
             </select>
           </label>
-          <div className="border-t border-[var(--line)] pt-3">
-            <div className="mb-2 text-xs font-medium text-[var(--muted)]">
-              {t.backup}
-            </div>
-            <BackupPanel />
-          </div>
-          <p className="text-[11px] leading-relaxed text-[var(--muted)]">
-            {t.shortcutsHint}
-          </p>
+          {shownMascot ? <label className="grid gap-1.5 text-xs text-[var(--muted)]">
+            <span className="flex items-center justify-between"><span>{t.mascotSize}</span><span className="tabular-nums opacity-80">{shownScale.toFixed(1)}</span></span>
+            <input type="range" min={MASCOT_SCALE_MIN} max={MASCOT_SCALE_MAX} step={0.1} className="ui-range" value={shownScale}
+              onChange={(event) => void save.submit({ mascotScale: Number(event.target.value) })} />
+          </label> : null}
+          <label className="flex items-center gap-2 text-sm text-[var(--muted)]">
+            <Languages className="size-4 shrink-0" /><span className="min-w-12 max-w-16 shrink-0">{t.language}</span>
+            <select id={`locale-${idSuffix}`} className="ui-input min-h-10 min-w-0 flex-1 px-1 text-sm"
+              value={save.patch.locale ?? locale} onChange={(event) => void save.submit({ locale: event.target.value === "en" ? "en" : "zh" })}>
+              <option value="zh">{t.chinese}</option><option value="en">{t.english}</option>
+            </select>
+          </label>
+          {save.failed ? <SaveStatus locale={locale} saving={save.saving} failed onRetry={() => void commitInputs()} /> : null}
+          <div className="border-t border-[var(--line)] pt-3"><div className="mb-2 text-xs font-medium text-[var(--muted)]">{t.backup}</div><BackupPanel /></div>
+          <p className="text-[11px] leading-relaxed text-[var(--muted)]">{t.shortcutsHint}</p>
         </div>
       ) : null}
     </div>
@@ -554,6 +493,9 @@ function MobileBar({ onMore }: { onMore: () => void }) {
   const view = useTodoStore((state) => state.view);
   const setView = useTodoStore((state) => state.setView);
   const t = ui(locale);
+  const navigation = usePendingPatch<{ view: AppView }>(async ({ view }) => {
+    if (view !== undefined) await setView(view);
+  });
   const focusPhase = usePomodoroStore((state) => state.phase);
   const focusRunning = usePomodoroStore((state) => state.running);
   const focusRemainingSeconds = usePomodoroStore(
@@ -568,6 +510,9 @@ function MobileBar({ onMore }: { onMore: () => void }) {
 
   return (
     <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-[var(--line)] bg-[var(--nav-glass)] px-2 pt-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] shadow-[0_-8px_24px_color-mix(in_srgb,var(--ink)_5%,transparent)] backdrop-blur-xl lg:hidden">
+      {navigation.failed ? <div className="absolute inset-x-2 bottom-full mb-2 rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--bg-elevated)] p-3 shadow-[var(--shadow-floating)]">
+        <SaveStatus locale={locale} saving={navigation.saving} failed onRetry={() => void navigation.retry()} />
+      </div> : null}
       {items.map((item) => {
         const active =
           item.view === "lists"
@@ -583,7 +528,7 @@ function MobileBar({ onMore }: { onMore: () => void }) {
           <button
             key={item.view}
             type="button"
-            onClick={() => void setView(item.view === "lists" ? "list" : item.view)}
+            onClick={() => void navigation.submit({ view: item.view === "lists" ? "list" : item.view })}
             className={cn(
               "flex flex-col items-center gap-0.5 rounded-lg px-1 py-1 text-[10px]",
               active

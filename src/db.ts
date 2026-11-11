@@ -1,4 +1,5 @@
 import Dexie, { type EntityTable } from "dexie";
+import { installRestoreGuard } from "./lib/restoreGuard";
 import type {
   AnimeRecord,
   HabitCheckInRecord,
@@ -212,6 +213,7 @@ export class TodoDatabase extends Dexie {
 }
 
 export const db = new TodoDatabase();
+installRestoreGuard(db);
 
 db.on("blocked", () => {
   console.warn("IndexedDB upgrade is blocked by another tab");

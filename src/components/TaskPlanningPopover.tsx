@@ -17,9 +17,16 @@ export function TaskPlanningPopover({task, open, onOpen, onClose}: {
   const trigger = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const id = useId();
+  const generation = useRef(0);
+  useEffect(() => {
+    const attempt = ++generation.current;
+    setSaving(false); setError(false); setTargetList(null);
+    return () => { generation.current = attempt + 1; };
+  }, [open, task.id]);
   const [position, setPosition] = useState({left:12, top:12, maxHeight:400});
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
+  const [targetList, setTargetList] = useState<string | null>(null);
   useLayoutEffect(()=>{
     if (!open || !trigger.current || !panel.current) return;
     const place = () => {
@@ -52,10 +59,15 @@ export function TaskPlanningPopover({task, open, onOpen, onClose}: {
     return ()=>{document.removeEventListener("pointerdown",outside);window.removeEventListener("keydown",escape,true);window.removeEventListener("scroll",scroll,true)};
   },[open,onClose]);
   const move = async (listId: string) => {
+    const attempt = generation.current;
+    setTargetList(listId);
     setSaving(true);setError(false);
-    try { await updateTask(task.id,{listId});onClose();trigger.current?.focus(); }
-    catch {setError(true)}
-    finally {setSaving(false)}
+    try {
+      await updateTask(task.id,{listId});
+      if (generation.current === attempt) { onClose();trigger.current?.focus(); }
+    }
+    catch { if (generation.current === attempt) setError(true); }
+    finally { if (generation.current === attempt) setSaving(false); }
   };
   return <>
     <button ref={trigger} type="button" aria-label={t.planTask+" "+task.title} title={t.planTask} aria-haspopup="dialog" aria-expanded={open} aria-controls={open?id:undefined}
@@ -70,13 +82,16 @@ export function TaskPlanningPopover({task, open, onOpen, onClose}: {
         <button type="button" aria-label={t.cancel} onClick={()=>{onClose();trigger.current?.focus()}} className="ui-button-secondary grid size-10 shrink-0 place-items-center"><X className="size-4" /></button>
       </div>
       <label className="mb-4 grid gap-1.5 text-xs text-[var(--muted)]">{t.lists}
-        <select aria-label={t.lists+" "+task.title} disabled={saving} value={task.listId}
+        <select aria-label={t.lists+" "+task.title} disabled={saving} value={targetList ?? task.listId}
           className="ui-input min-h-10 w-full px-3 py-2 text-sm" onChange={event=>void move(event.target.value)}>
           {lists.map(list=><option key={list.id} value={list.id}>{list.name}</option>)}
         </select>
       </label>
       <TaskScheduleControl task={task} onChange={()=>{onClose();trigger.current?.focus()}} />
-      {error?<p role="alert" className="mt-2 text-xs text-[var(--danger)]">{t.taskSaveFailed}</p>:null}
+      {error?<div role="alert" className="mt-2 space-y-2 text-xs text-[var(--danger)]">
+        <p>{t.taskSaveFailed}</p>
+        <button type="button" className="ui-button-secondary min-h-10 px-3 py-2" disabled={saving} onClick={() => { if (targetList) void move(targetList); }}>{locale === "zh" ? "重试保存" : "Retry save"}</button>
+      </div>:null}
     </div>,document.body):null}
   </>;
 }

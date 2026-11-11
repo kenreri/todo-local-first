@@ -1,3 +1,6 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
+import { useLocalMinute } from "../hooks/useLocalDate";
 import { Bell, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ui } from "../i18n/messages";
@@ -8,18 +11,13 @@ import { useTodoStore } from "../store/todoStore";
 export function AnimeReminder() {
   const locale = useTodoStore((state) => state.locale);
   const anime = useTodoStore((state) => state.anime);
-  const setView = useTodoStore((state) => state.setView);
+  const navigation = useViewNavigation();
   const t = ui(locale);
-  const [clock, setClock] = useState(() => Date.now());
+  const clock = useLocalMinute();
   const [dismissed, setDismissed] = useState(false);
   const [permission, setPermission] = useState<
     NotificationPermission | "unsupported"
   >("default");
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!("Notification" in window)) {
@@ -70,7 +68,7 @@ export function AnimeReminder() {
           <button
             type="button"
             className="inline-flex items-center gap-2 font-medium text-[var(--accent)] hover:underline"
-            onClick={() => void setView("anime")}
+            disabled={navigation.saving} onClick={() => void navigation.navigate("anime")}
           >
             <Bell className="size-4" /> {t.animeToday}
           </button>
@@ -106,6 +104,7 @@ export function AnimeReminder() {
           <X className="size-4" />
         </button>
       </div>
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
     </aside>
   );
 }

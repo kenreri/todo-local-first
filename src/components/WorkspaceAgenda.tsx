@@ -1,3 +1,5 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
 import { CalendarDays, ChevronDown, Clock3, Headphones } from "lucide-react";
 import { useState } from "react";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -14,14 +16,16 @@ export function WorkspaceAgenda({
   today: string;
   onTask: (id: string) => void;
 }) {
-  const zh = useTodoStore((state) => state.locale) === "zh";
-  const setView = useTodoStore((state) => state.setView);
+  const locale = useTodoStore((state) => state.locale);
+  const zh = locale === "zh";
+  const navigation = useViewNavigation();
   const agenda = workspaceAgenda(tasks, today);
   const wide = useMediaQuery("(min-width: 1280px)");
   const [expanded, setExpanded] = useState(false);
   const next = agenda.overdue[0] ?? agenda.upcoming[0];
   return (
     <div className="space-y-3 xl:sticky xl:top-4">
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
       {!wide ? (
         <section
           aria-label={zh ? "今日与截止摘要" : "Plan and deadline summary"}
@@ -60,7 +64,7 @@ export function WorkspaceAgenda({
             <button
               type="button"
               aria-label={zh ? "进入专注" : "Focus space"}
-              onClick={() => void setView("pomodoro")}
+              disabled={navigation.saving} onClick={() => void navigation.navigate("pomodoro")}
               className="grid size-10 shrink-0 place-items-center rounded-[var(--radius-small)] bg-[var(--accent-soft)] text-[var(--accent)]"
             >
               <Headphones className="size-4" />
@@ -124,7 +128,7 @@ export function WorkspaceAgenda({
             </div>
             <button
               type="button"
-              onClick={() => void setView("today")}
+              disabled={navigation.saving} onClick={() => void navigation.navigate("today")}
               className="mt-1 min-h-10 text-xs text-[var(--accent)]"
             >
               {zh ? "查看今日安排 →" : "Open today's plan →"}
@@ -188,7 +192,7 @@ export function WorkspaceAgenda({
             ) : null}
             <button
               type="button"
-              onClick={() => void setView("list")}
+              disabled={navigation.saving} onClick={() => void navigation.navigate("list")}
               className="mt-1 min-h-10 text-xs text-[var(--accent)]"
             >
               {zh ? "查看全部任务 →" : "View all tasks →"}
@@ -199,7 +203,7 @@ export function WorkspaceAgenda({
       {wide ? (
         <button
           type="button"
-          onClick={() => void setView("pomodoro")}
+          disabled={navigation.saving} onClick={() => void navigation.navigate("pomodoro")}
           className="flex min-h-14 w-full items-center gap-3 rounded-[var(--radius-card)] bg-[var(--accent-soft)] px-4 py-3 text-left text-[var(--accent)]"
         >
           <Headphones className="size-5 shrink-0" />

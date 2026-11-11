@@ -1,3 +1,5 @@
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
+import { useLocalDate } from "../hooks/useLocalDate";
 import { useMemo, useState } from "react";
 import {
   DndContext,
@@ -33,7 +35,6 @@ import { selectVisibleRootTasks, useTodoStore } from "../store/todoStore";
 import type { TaskRecord } from "../types";
 import { QuickCapture } from "./QuickCapture";
 import { TaskPlanningPopover } from "./TaskPlanningPopover";
-import { todayKey } from "../lib/dates";
 import { planningLabel } from "../lib/taskPlanning";
 import { TaskViewHeader } from "./TaskViewHeader";
 
@@ -56,6 +57,7 @@ export function ListView() {
   const setCheckedIds = useTodoStore((s) => s.setCheckedIds);
   const clearChecked = useTodoStore((s) => s.clearChecked);
   const t = ui(locale);
+  const { run, failed } = useSaveFeedback();
   const [bulkMode, setBulkMode] = useState(false);
   const [planningTaskId, setPlanningTaskId] = useState<string | null>(null);
   const canReorder = selectedListId != null && !bulkMode && filter === "all" && search.trim() === "";
@@ -79,6 +81,11 @@ export function ListView() {
     [tasks],
   );
 
+  const scopeKey = JSON.stringify([selectedListId, search, filter]);
+  const [page, setPage] = useState({ scopeKey, limit: 100 });
+  const limit = page.scopeKey === scopeKey ? page.limit : 100;
+  const visibleTasks = tasks.slice(0, limit);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
   );
@@ -92,9 +99,9 @@ export function ListView() {
     // Keep completed below incomplete; do not interleave zones via drag.
     if (oldIndex < 0 || newIndex < 0) return;
     const nextActive = arrayMove(activeTasks, oldIndex, newIndex);
-    void reorderTasks(
+    void run(() => reorderTasks(
       [...nextActive, ...completedTasks].map((task) => task.id),
-    );
+    ));
   };
 
   const toggleBulkMode = () => {
@@ -106,6 +113,7 @@ export function ListView() {
   return (
     <section className="min-w-0 space-y-6">
       <TaskViewHeader />
+      {failed ? <p role="alert" className="text-sm text-[var(--danger)]">{t.taskSaveFailed}</p> : null}
       <div className="ui-card min-w-0 p-4 md:p-6">
         <div className="mb-5"><QuickCapture /></div>
 
@@ -205,30 +213,36 @@ export function ListView() {
               onDragEnd={onDragEnd}
             >
               <SortableContext
-                items={tasks.map((task) => task.id)}
+                items={visibleTasks.map((task) => task.id)}
                 strategy={verticalListSortingStrategy}
               >
                 <ul className="space-y-3">
-                  {tasks.map((task) => (
+                  {visibleTasks.map((task) => (
                     <SortableTaskRow
                       key={task.id}
                       task={task}
                       showList={selectedListId == null}
                       planningOpen={planningTaskId === task.id}
                       onPlanOpen={() => setPlanningTaskId(task.id)}
-                      onPlanClose={() => setPlanningTaskId(null)}
+                      onPlanClose={() => setPlanningTaskId(current => current === task.id ? null : current)}
                       active={selectedTaskId === task.id}
                       checked={checkedIds.includes(task.id)}
                       bulkMode={bulkMode}
                       draggable={canReorder && !isTaskCompleted(task)}
                       onCheck={() => toggleChecked(task.id)}
                       onSelect={() => selectTask(task.id)}
-                      onToggle={() => void toggleTask(task.id)}
+                      onToggle={() => void run(() => toggleTask(task.id))}
                     />
                   ))}
                 </ul>
               </SortableContext>
             </DndContext>
+            {tasks.length > visibleTasks.length ? (
+              <button type="button" className="ui-button-secondary mt-4 min-h-10 w-full px-4 py-2"
+                onClick={() => setPage({ scopeKey, limit: limit + 100 })}>
+                {locale === "zh" ? `显示更多（${visibleTasks.length} / ${tasks.length}）` : `Show more (${visibleTasks.length} / ${tasks.length})`}
+              </button>
+            ) : null}
           </>
         )}
       </div>
@@ -267,7 +281,7 @@ function SortableTaskRow({
   const lists = useTodoStore((s) => s.lists);
   const list = lists.find((item) => item.id === task.listId);
   const t = ui(locale);
-  const today = todayKey();
+  const today = useLocalDate();
   const followsRepeat = Boolean(task.repeatRule && !task.scheduledDate);
   const plannedToday = task.scheduledDate === today;
   const metadataClass = "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--nav-bg)] px-2 py-0.5 text-[11px] leading-4";

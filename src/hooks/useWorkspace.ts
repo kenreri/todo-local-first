@@ -1,16 +1,23 @@
 import { liveQuery } from "dexie";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { db } from "../db";
 import type { AttachmentRecord, WorkspaceItem } from "../types";
+import { reconcileRecords } from "../lib/reconcileRecords";
 
 export function useWorkspace() {
+  const [attempt, setAttempt] = useState(0);
   const [snapshot, setSnapshot] = useState<{
     items: WorkspaceItem[];
     attachments: AttachmentRecord[];
     loading: boolean;
     failed: boolean;
   }>({ items: [], attachments: [], loading: true, failed: false });
+  const retry = useCallback(() => {
+    setSnapshot(previous => ({ ...previous, loading: true, failed: false }));
+    setAttempt(previous => previous + 1);
+  }, []);
   useEffect(() => {
+    let active = true;
     const subscription = liveQuery(async () => {
       const [items, attachments] = await Promise.all([
         db.workspaceItems.toArray(),
@@ -25,15 +32,27 @@ export function useWorkspace() {
         failed: false,
       };
     }).subscribe({
-      next: setSnapshot,
-      error: () =>
+      next: next => {
+        if (!active) return;
+        setSnapshot(previous => ({
+          ...next,
+          items: reconcileRecords(previous.items, next.items),
+          attachments: reconcileRecords(previous.attachments, next.attachments),
+        }));
+      },
+      error: () => {
+        if (!active) return;
         setSnapshot((previous) => ({
           ...previous,
           loading: false,
           failed: true,
-        })),
+        }));
+      },
     });
-    return () => subscription.unsubscribe();
-  }, []);
-  return snapshot;
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, [attempt]);
+  return { ...snapshot, retry };
 }

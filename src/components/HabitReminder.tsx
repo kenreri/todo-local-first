@@ -1,3 +1,6 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
+import { useLocalMinute } from "../hooks/useLocalDate";
 import { Bell, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ui } from "../i18n/messages";
@@ -9,18 +12,13 @@ export function HabitReminder() {
   const locale = useTodoStore((state) => state.locale);
   const habits = useTodoStore((state) => state.habits);
   const checkIns = useTodoStore((state) => state.habitCheckIns);
-  const setView = useTodoStore((state) => state.setView);
+  const navigation = useViewNavigation();
   const t = ui(locale);
-  const [clock, setClock] = useState(() => Date.now());
+  const clock = useLocalMinute();
   const [dismissed, setDismissed] = useState(false);
   const [permission, setPermission] = useState<
     NotificationPermission | "unsupported"
   >("default");
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setClock(Date.now()), 30_000);
-    return () => window.clearInterval(timer);
-  }, []);
 
   useEffect(() => {
     if (!("Notification" in window)) {
@@ -78,7 +76,7 @@ export function HabitReminder() {
           <button
             type="button"
             className="inline-flex items-center gap-2 font-medium text-[var(--accent)] hover:underline"
-            onClick={() => void setView("habits")}
+            disabled={navigation.saving} onClick={() => void navigation.navigate("habits")}
           >
             <Bell className="size-4" />
             {t.habitToday}
@@ -120,6 +118,7 @@ export function HabitReminder() {
           <X className="size-4" />
         </button>
       </div>
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
     </aside>
   );
 }

@@ -1,17 +1,14 @@
 ---
-description: TODO 清单项目总览与技术边界（始终生效）；细节以 AGENTS.md 为准
+description: 个人local-first工作台入口；约束和接续流程以仓库文档为准
 alwaysApply: true
 ---
 
-# TODO 清单 · 项目约束
+# 个人工作台 · 接手入口
 
-权威细则：`AGENTS.md`。工作流：`跨Agent协作方案.md`。下一刀：`CURRENT.md`。避坑：`经验手册.md`。
+先读 `AGENTS.md` → `CURRENT.md`，再按 `跨Agent协作方案.md` 的任务查阅表定位文档/源码。用户指定切片优先，保留已有修改。
 
-- 产品：个人清单 + 日历 + 习惯 + 追番 + 番茄钟 + 统计；仅个人。
-- 架构：M1–M4 local-first（React + Dexie）；M5 为后续大阶段，当前切片与暂缓安排以 CURRENT 为准。
-- 禁栈：CRDT、Redux、过早后端、Ant Design / shadcn；不做可选 Tauri（除非用户点名）。
-- UI：只引用 `src/index.css` token；改界面先读 `design.md`，浅色/深色都验。
-- 收工：写 `开发日志.md`、更新 `CURRENT.md`；有坑写 `经验手册.md`；不主动 commit。
-- 进度勾选：`ROADMAP.md`；概念说明：`开发入门导读.md`。
+- 当前为 React + Dexie 的个人工作台，沿用自定义 Tailwind 和 History API；不自动开始 M5/Tauri。
+- 改 UI 先读 design，颜色只用 index.css token；改数据先读 db.ts/types.ts 和实际写入链。
+- 验证、独立构建、服务切换与收工记录遵循 AGENTS；历史验证不当本次证据，不主动commit/push/发布。
 
-- 文档入口：README；项目评估、部署运维与验收清单在 docs/，不把历史验收当成本轮结果。
+详细约束不在本入口重复维护。

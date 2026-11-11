@@ -1,0 +1,34 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import { currentMinute, subscribeLocalClock } from './localClock';
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+it('refreshes at local midnight and catches up after sleep, with shared timer cleanup', () => {
+  vi.useFakeTimers();
+  const windowEvents = new EventTarget();
+  const documentEvents = Object.assign(new EventTarget(), { visibilityState: 'visible' });
+  vi.stubGlobal('window', windowEvents);
+  vi.stubGlobal('document', documentEvents);
+  vi.setSystemTime(new Date(2026, 10, 11, 23, 59, 59));
+  const first = vi.fn(); const second = vi.fn();
+  const stopFirst = subscribeLocalClock(first);
+  const stopSecond = subscribeLocalClock(second);
+  expect(vi.getTimerCount()).toBe(1);
+  vi.advanceTimersByTime(1000);
+  expect(new Date(currentMinute()).getDate()).toBe(12);
+  expect(second).toHaveBeenCalledOnce();
+  documentEvents.visibilityState = 'hidden';
+  documentEvents.dispatchEvent(new Event('visibilitychange'));
+  expect(vi.getTimerCount()).toBe(0);
+  vi.setSystemTime(new Date(2026, 10, 14, 8, 30));
+  documentEvents.visibilityState = 'visible';
+  documentEvents.dispatchEvent(new Event('visibilitychange'));
+  expect(new Date(currentMinute()).getDate()).toBe(14);
+  vi.setSystemTime(new Date(2026, 10, 15, 9, 30));
+  windowEvents.dispatchEvent(new Event('pageshow'));
+  expect(new Date(currentMinute()).getDate()).toBe(15);
+  stopFirst(); stopSecond();
+  expect(vi.getTimerCount()).toBe(0);
+  const calls = first.mock.calls.length;
+  windowEvents.dispatchEvent(new Event('focus'));
+  expect(first).toHaveBeenCalledTimes(calls);
+});

@@ -1,1 +1,1 @@
-先读 [AGENTS.md](AGENTS.md)，再按开工清单执行（CURRENT → 相关经验 → ROADMAP）。用户指定切片优先。文档总入口见 [README](README.md)，工作流见 [跨 Agent 协作方案](跨Agent协作方案.md)。
+先读 [AGENTS.md](AGENTS.md) 与 [CURRENT.md](CURRENT.md)，再按 [任务查阅表](跨Agent协作方案.md#按任务查阅) 选读相关文档/源码。用户指定任务优先，保留既有修改；验证与收工遵循AGENTS，未经明确要求不commit/push/发布。

@@ -1,3 +1,6 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
+import { createPortal } from "react-dom";
 import { Pause, Play, Timer } from "lucide-react";
 import { ui } from "../i18n/messages";
 import { cn } from "../lib/cn";
@@ -11,7 +14,7 @@ export function FocusStatusIndicator({
   compact?: boolean;
 }) {
   const locale = useTodoStore((state) => state.locale);
-  const setView = useTodoStore((state) => state.setView);
+  const navigation = useViewNavigation();
   const tasks = useTodoStore((state) => state.tasks);
   const phase = usePomodoroStore((state) => state.phase);
   const running = usePomodoroStore((state) => state.running);
@@ -39,13 +42,14 @@ export function FocusStatusIndicator({
     .replace("{state}", running ? t.focusRunning : t.focusPaused);
 
   return (
+    <div className={compact ? "relative" : undefined}>
     <button
       type="button"
       data-phase={phase}
       data-running={running}
       aria-label={ariaLabel}
       title={ariaLabel}
-      onClick={() => void setView("pomodoro")}
+      disabled={navigation.saving} onClick={() => void navigation.navigate("pomodoro")}
       className={cn(
         "focus-status group text-left",
         compact
@@ -82,5 +86,13 @@ export function FocusStatusIndicator({
         <Pause className="sr-only" />
       )}
     </button>
+    {navigation.saving || navigation.failed ? compact ? createPortal(
+      <div className="fixed bottom-4 left-16 z-50 w-64 max-w-[calc(100vw-5rem)] rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--bg-elevated)] p-3 shadow-[var(--shadow-floating)]">
+        <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
+      </div>, document.body,
+    ) : <div className="mt-2">
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
+    </div> : null}
+    </div>
   );
 }

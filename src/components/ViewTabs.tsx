@@ -13,6 +13,8 @@ import { cn } from "../lib/cn";
 import { ui } from "../i18n/messages";
 import { useTodoStore, type AppView } from "../store/todoStore";
 import { Sidebar } from "./Sidebar";
+import { usePendingPatch } from "../hooks/usePendingPatch";
+import { SaveStatus } from "./SaveStatus";
 
 interface NavigationItem {
   view: AppView;
@@ -31,6 +33,13 @@ export function ViewTabs({ onNavigate }: { onNavigate?: () => void }) {
     (state) => state.setListsGroupCollapsed,
   );
   const t = ui(locale);
+  const navigation = usePendingPatch<{ view: AppView }>(async ({ view }) => {
+    if (view !== undefined) await setView(view);
+  });
+  const folding = usePendingPatch<{ collapsed: boolean }>(async ({ collapsed }) => {
+    if (collapsed !== undefined) await setListsGroupCollapsed(collapsed);
+  });
+  const shownCollapsed = folding.patch.collapsed ?? listsGroupCollapsed;
   const groups: { label: string; items: NavigationItem[] }[] = [
     {
       label: t.navWork,
@@ -56,12 +65,14 @@ export function ViewTabs({ onNavigate }: { onNavigate?: () => void }) {
   ];
 
   const navigate = async (target: AppView) => {
-    await setView(target === "lists" ? "list" : target);
-    onNavigate?.();
+    if (await navigation.submit({ view: target === "lists" ? "list" : target })) onNavigate?.();
   };
 
   return (
     <nav className="space-y-6" aria-label={t.primaryNavigation}>
+      <SaveStatus locale={locale} saving={navigation.saving || folding.saving}
+        failed={navigation.failed || folding.failed}
+        onRetry={() => { void navigation.retry(); void folding.retry(); }} />
       {groups.map((group) => (
         <section key={group.label}>
           <h2 className="mb-2 px-3 text-[11px] leading-4 font-semibold tracking-[0.12em] text-[var(--muted)] uppercase">
@@ -99,22 +110,22 @@ export function ViewTabs({ onNavigate }: { onNavigate?: () => void }) {
                       <button
                         type="button"
                         onClick={() =>
-                          void setListsGroupCollapsed(!listsGroupCollapsed)
+                          void folding.submit({ collapsed: !shownCollapsed })
                         }
                         aria-label={
-                          listsGroupCollapsed
+                          shownCollapsed
                             ? t.expandListsGroup
                             : t.collapseListsGroup
                         }
                         title={
-                          listsGroupCollapsed
+                          shownCollapsed
                             ? t.expandListsGroup
                             : t.collapseListsGroup
                         }
-                        aria-expanded={!listsGroupCollapsed}
+                        aria-expanded={!shownCollapsed}
                         className="ml-1 grid size-10 shrink-0 place-items-center rounded-[var(--radius-control)] text-[var(--muted)] transition hover:bg-[var(--hover)] hover:text-[var(--ink)]"
                       >
-                        {listsGroupCollapsed ? (
+                        {shownCollapsed ? (
                           <ChevronRight className="size-4" />
                         ) : (
                           <ChevronDown className="size-4" />
@@ -122,7 +133,7 @@ export function ViewTabs({ onNavigate }: { onNavigate?: () => void }) {
                       </button>
                     ) : null}
                   </div>
-                  {item.view === "lists" && !listsGroupCollapsed ? (
+                  {item.view === "lists" && !shownCollapsed ? (
                     <Sidebar onNavigate={onNavigate} />
                   ) : null}
                 </li>

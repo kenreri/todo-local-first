@@ -60,6 +60,59 @@ function focusRecord(
 }
 
 describe("stats date ranges", () => {
+  it("moves every review metric at midnight without requiring record changes", () => {
+    const firstDay = "2026-11-10";
+    const nextDay = "2026-11-11";
+    const oldestDay = addDays(firstDay, -6);
+    const atNoon = (day: string) => {
+      const date = parseDateKey(day);
+      date.setHours(12);
+      return date.getTime();
+    };
+    const tasks = [oldestDay, firstDay].map((day, index) => ({
+      ...task(`midnight-${index}`, 0, 0, [index === 0 ? "expired" : "kept"]),
+      createdAt: atNoon(day),
+      completedAt: atNoon(day),
+    }));
+    const records = [oldestDay, firstDay].map((day, index) => {
+      const duration = (index + 1) * 60;
+      const endAt = atNoon(day);
+      return {
+        ...focusRecord(`midnight-${index}`, 0, duration),
+        startAt: endAt - duration * 1_000,
+        endAt,
+        createdAt: endAt,
+      };
+    });
+
+    expect(buildCompletionRate(tasks, 7, firstDay).total).toBe(2);
+    expect(buildCompletionRate(tasks, 7, nextDay).total).toBe(1);
+    expect(buildCompletionTrend(tasks, 7, firstDay)[0]).toEqual({ date: oldestDay, count: 1 });
+    expect(buildCompletionTrend(tasks, 7, nextDay).at(-1)).toEqual({ date: nextDay, count: 0 });
+    expect(buildTagDistribution(tasks, 7, firstDay)).toHaveLength(2);
+    expect(buildTagDistribution(tasks, 7, nextDay)).toEqual([{ tag: "kept", count: 1 }]);
+    expect(buildFocusMinutes(records, 7, firstDay)[0].minutes).toBe(1);
+    expect(buildFocusMinutes(records, 7, nextDay)[0].minutes).toBe(0);
+    expect(totalFocusMinutes(records, 7, firstDay)).toBe(3);
+    expect(totalFocusMinutes(records, 7, nextDay)).toBe(2);
+    expect(buildReviewInsights(tasks, records, 7, firstDay)).toMatchObject({
+      completed: 2, minutes: 3, activeFocusDays: 2, completionDelta: 2, focusDelta: 3,
+    });
+    expect(buildReviewInsights(tasks, records, 7, nextDay)).toMatchObject({
+      completed: 1, minutes: 2, activeFocusDays: 1, completionDelta: 0, focusDelta: 1,
+      bestDay: { date: firstDay, count: 1 },
+    });
+  });
+
+  it("uses the supplied local day across leap-month and year boundaries", () => {
+    expect(buildCompletionTrend([], 3, "2024-03-01").map((day) => day.date)).toEqual([
+      "2024-02-28", "2024-02-29", "2024-03-01",
+    ]);
+    expect(buildFocusMinutes([], 2, "2027-01-01").map((day) => day.date)).toEqual([
+      "2026-12-31", "2027-01-01",
+    ]);
+  });
+
   it("compares adjacent periods and includes older tasks completed recently", () => {
     const insights = buildReviewInsights([
       task("old-recent", -30, -1),

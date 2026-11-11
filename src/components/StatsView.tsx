@@ -1,3 +1,5 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   Bar,
@@ -20,27 +22,29 @@ import {
 import { useTodoStore } from "../store/todoStore";
 import { PageHeader } from "./PageHeader";
 import { SakuraEmpty } from "./SakuraEmpty";
+import { useLocalDate } from "../hooks/useLocalDate";
 
 export function StatsView() {
   const locale = useTodoStore((s) => s.locale);
   const tasks = useTodoStore((s) => s.tasks);
   const pomodoroRecords = useTodoStore((s) => s.pomodoroRecords);
   const t = ui(locale);
-  const setView = useTodoStore((s) => s.setView);
+  const navigation = useViewNavigation();
   const [days, setDays] = useState<7 | 14 | 30>(14);
+  const today = useLocalDate();
 
-  const trend = useMemo(() => buildCompletionTrend(tasks, days), [tasks, days]);
-  const rate = useMemo(() => buildCompletionRate(tasks, days), [tasks, days]);
-  const tags = useMemo(() => buildTagDistribution(tasks, days), [tasks, days]);
+  const trend = useMemo(() => buildCompletionTrend(tasks, days, today), [tasks, days, today]);
+  const rate = useMemo(() => buildCompletionRate(tasks, days, today), [tasks, days, today]);
+  const tags = useMemo(() => buildTagDistribution(tasks, days, today), [tasks, days, today]);
   const focus = useMemo(
-    () => buildFocusMinutes(pomodoroRecords, days),
-    [pomodoroRecords, days],
+    () => buildFocusMinutes(pomodoroRecords, days, today),
+    [pomodoroRecords, days, today],
   );
   const totalFocus = useMemo(
-    () => totalFocusMinutes(pomodoroRecords, days),
-    [pomodoroRecords, days],
+    () => totalFocusMinutes(pomodoroRecords, days, today),
+    [pomodoroRecords, days, today],
   );
-  const insights = useMemo(() => buildReviewInsights(tasks, pomodoroRecords, days), [tasks, pomodoroRecords, days]);
+  const insights = useMemo(() => buildReviewInsights(tasks, pomodoroRecords, days, today), [tasks, pomodoroRecords, days, today]);
   const signed = (value: number) => value > 0 ? `+${value}` : String(value);
   const comparison = t.reviewComparison.replace("{tasks}", signed(insights.completionDelta)).replace("{minutes}", signed(insights.focusDelta));
 
@@ -70,12 +74,13 @@ export function StatsView() {
         }
       />
 
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
       {!insights.hasActivity ? (
         <div className="ui-card p-6">
           <SakuraEmpty title={t.reviewEmpty} description={t.reviewEmptyHint} />
           <div className="flex flex-wrap justify-center gap-3">
-            <button type="button" className="ui-button-primary px-4 py-2" onClick={() => void setView("pomodoro")}>{t.startFocus}</button>
-            <button type="button" className="ui-button-secondary px-4 py-2" onClick={() => void setView("today")}>{t.viewToday}</button>
+            <button type="button" className="ui-button-primary px-4 py-2" disabled={navigation.saving} onClick={() => void navigation.navigate("pomodoro")}>{t.startFocus}</button>
+            <button type="button" className="ui-button-secondary px-4 py-2" disabled={navigation.saving} onClick={() => void navigation.navigate("today")}>{t.viewToday}</button>
           </div>
         </div>
       ) : (

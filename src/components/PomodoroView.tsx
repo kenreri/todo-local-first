@@ -1,7 +1,9 @@
 import { useEffect, useMemo } from "react";
 import { Pause, Play, RotateCcw, SkipForward } from "lucide-react";
 import { ui } from "../i18n/messages";
-import { todayKey } from "../lib/dates";
+import { useLocalDate } from "../hooks/useLocalDate";
+import { usePendingPatch } from "../hooks/usePendingPatch";
+import { SaveStatus } from "./SaveStatus";
 import {
   isFocusBindingLocked,
   phaseDurationSeconds,
@@ -15,7 +17,7 @@ import {
 import { playPomodoroCue } from "../lib/pomodoroSound";
 import { usePomodoroStore } from "../store/pomodoroStore";
 import { useTodoStore } from "../store/todoStore";
-import type { Locale, PomodoroRecord } from "../types";
+import type { Locale, PomodoroConfig, PomodoroRecord } from "../types";
 import { PageHeader } from "./PageHeader";
 import { formatPomodoroTime } from "../lib/pomodoro";
 
@@ -41,14 +43,18 @@ export function PomodoroView() {
   const startWork = usePomodoroStore((state) => state.startWork);
   const pause = usePomodoroStore((state) => state.pause);
   const resume = usePomodoroStore((state) => state.resume);
+  const isController = usePomodoroStore((state) => state.isController);
   const reset = usePomodoroStore((state) => state.reset);
   const skip = usePomodoroStore((state) => state.skip);
+  const day = useLocalDate();
+  const hydration = usePendingPatch<{ requested: boolean }>(async () => { await hydrateConfig(); });
+  const requestConfig = hydration.submit;
+  const configSave = usePendingPatch<PomodoroConfig>(updateConfig);
+  const draftConfig = { ...config, ...configSave.patch };
 
   useEffect(() => {
-    void hydrateConfig().catch((error) => {
-      console.error("Could not load focus settings", error);
-    });
-  }, [hydrateConfig]);
+    void requestConfig({ requested: true });
+  }, [requestConfig]);
 
   const taskById = useMemo(
     () => new Map(tasks.map((task) => [task.id, task])),
@@ -91,8 +97,8 @@ export function PomodoroView() {
         : config.shortBreakMinutes
       : config.workMinutes;
   const todaySummary = useMemo(
-    () => summarizeFocusDay(pomodoroRecords, todayKey()),
-    [pomodoroRecords],
+    () => summarizeFocusDay(pomodoroRecords, day),
+    [pomodoroRecords, day],
   );
   const recentRecords = useMemo(
     () => pomodoroRecords.slice(0, 3),
@@ -110,6 +116,13 @@ export function PomodoroView() {
   return (
     <section className="min-w-0 space-y-6">
       <PageHeader title={t.navFocus} description={t.focusSubtitle} />
+      {hydration.failed ? <div role="alert" className="ui-card flex flex-wrap items-center gap-3 p-4 text-sm text-[var(--danger)]">
+        <span>{locale === "zh" ? "无法读取专注设置，请重试。" : "Could not load focus settings. Please retry."}</span>
+        <button type="button" className="ui-button-secondary min-h-10 px-3 py-2" onClick={() => void hydration.retry()}>
+          {locale === "zh" ? "重新读取" : "Retry loading"}
+        </button>
+      </div> : null}
+      <SaveStatus locale={locale} saving={configSave.saving} failed={configSave.failed} onRetry={() => void configSave.retry()} />
 
       <div
         className="focus-card ui-card min-w-0 p-5 md:p-6 2xl:p-7"
@@ -181,10 +194,12 @@ export function PomodoroView() {
             </div>
           </div>
 
+          {!isController ? <p role="status" className="text-sm text-[var(--muted)]">{locale === "zh" ? "计时由另一个标签页控制；关闭该页后，此页会自动接管。" : "Another tab controls the timer. Close it to continue here."}</p> : null}
           <div className="flex flex-wrap justify-center gap-2">
             {!running ? (
               <button
                 type="button"
+                disabled={!isController || hydration.pending || configSave.pending}
                 onClick={() => (phase === "idle" ? startWork() : resume())}
                 className="ui-button-primary inline-flex items-center gap-2 px-4 py-2.5"
               >
@@ -197,6 +212,7 @@ export function PomodoroView() {
             ) : (
               <button
                 type="button"
+                disabled={!isController}
                 onClick={pause}
                 className="ui-button-secondary inline-flex items-center gap-2 px-4 py-2.5"
               >
@@ -206,7 +222,7 @@ export function PomodoroView() {
             )}
             <button
               type="button"
-              disabled={!canSkip}
+              disabled={!isController || !canSkip}
               onClick={() => {
                 if (
                   phase === "work" &&
@@ -226,7 +242,7 @@ export function PomodoroView() {
             </button>
             <button
               type="button"
-              disabled={phase === "idle"}
+              disabled={!isController || phase === "idle"}
               onClick={() => {
                 if (hasStartedWork && !window.confirm(t.pomodoroResetConfirm))
                   return;
@@ -244,20 +260,26 @@ export function PomodoroView() {
           <summary className="cursor-pointer list-none text-sm font-medium text-[var(--muted)] hover:text-[var(--ink)] [&::-webkit-details-marker]:hidden">
             {t.pomodoroSettings}
           </summary>
+          <fieldset disabled={hydration.pending}>
           <div className="mt-4">
             <p className="text-sm font-medium text-[var(--ink)]">
               {t.pomodoroQuickPresets}
             </p>
             <div className="mt-2 flex flex-wrap gap-2">
               {POMODORO_PRESETS.map((preset) => {
-                const selected = matchesPomodoroPreset(config, preset);
+                const selected = matchesPomodoroPreset(draftConfig, preset);
                 return (
                   <button
                     key={preset.id}
                     type="button"
                     disabled={settingsLocked}
                     aria-pressed={selected}
-                    onClick={() => void updateConfig(preset)}
+                    onClick={() => void configSave.submit({
+                      workMinutes: preset.workMinutes,
+                      shortBreakMinutes: preset.shortBreakMinutes,
+                      longBreakMinutes: preset.longBreakMinutes,
+                      cyclesBeforeLongBreak: preset.cyclesBeforeLongBreak,
+                    })}
                     className={`rounded-xl border px-3 py-2 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-50 ${
                       selected
                         ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--on-accent)]"
@@ -277,28 +299,28 @@ export function PomodoroView() {
             <div className="grid gap-3 sm:grid-cols-2">
               <ConfigInput
                 label={t.workMinutes}
-                value={config.workMinutes}
-                onChange={(value) => void updateConfig({ workMinutes: value })}
+                value={draftConfig.workMinutes}
+                onChange={(value) => void configSave.submit({ workMinutes: value })}
               />
               <ConfigInput
                 label={t.shortBreakMinutes}
-                value={config.shortBreakMinutes}
+                value={draftConfig.shortBreakMinutes}
                 onChange={(value) =>
-                  void updateConfig({ shortBreakMinutes: value })
+                  void configSave.submit({ shortBreakMinutes: value })
                 }
               />
               <ConfigInput
                 label={t.longBreakMinutes}
-                value={config.longBreakMinutes}
+                value={draftConfig.longBreakMinutes}
                 onChange={(value) =>
-                  void updateConfig({ longBreakMinutes: value })
+                  void configSave.submit({ longBreakMinutes: value })
                 }
               />
               <ConfigInput
                 label={t.cyclesBeforeLongBreak}
-                value={config.cyclesBeforeLongBreak}
+                value={draftConfig.cyclesBeforeLongBreak}
                 onChange={(value) =>
-                  void updateConfig({ cyclesBeforeLongBreak: value })
+                  void configSave.submit({ cyclesBeforeLongBreak: value })
                 }
               />
             </div>
@@ -317,17 +339,17 @@ export function PomodoroView() {
               <PreferenceToggle
                 label={t.autoStartBreaks}
                 description={t.autoStartBreaksHint}
-                enabled={config.autoStartBreaks}
+                enabled={draftConfig.autoStartBreaks}
                 onChange={(enabled) =>
-                  void updateConfig({ autoStartBreaks: enabled })
+                  void configSave.submit({ autoStartBreaks: enabled })
                 }
               />
               <PreferenceToggle
                 label={t.autoStartFocus}
                 description={t.autoStartFocusHint}
-                enabled={config.autoStartFocus}
+                enabled={draftConfig.autoStartFocus}
                 onChange={(enabled) =>
-                  void updateConfig({ autoStartFocus: enabled })
+                  void configSave.submit({ autoStartFocus: enabled })
                 }
               />
             </div>
@@ -341,14 +363,14 @@ export function PomodoroView() {
               <PreferenceToggle
                 label={t.pomodoroSound}
                 description={t.pomodoroSoundHint}
-                enabled={config.soundEnabled}
+                enabled={draftConfig.soundEnabled}
                 onChange={(enabled) =>
-                  void updateConfig({ soundEnabled: enabled })
+                  void configSave.submit({ soundEnabled: enabled })
                 }
               />
               <div
                 className={`rounded-2xl border border-[var(--line)] bg-[var(--surface)] px-3 py-3 ${
-                  config.soundEnabled ? "" : "opacity-55"
+                  draftConfig.soundEnabled ? "" : "opacity-55"
                 }`}
               >
                 <div className="flex items-center justify-between gap-3 text-sm">
@@ -356,7 +378,7 @@ export function PomodoroView() {
                     {t.pomodoroSoundVolume}
                   </span>
                   <span className="tabular-nums text-[var(--muted)]">
-                    {config.soundVolume}%
+                    {draftConfig.soundVolume}%
                   </span>
                 </div>
                 <input
@@ -365,11 +387,11 @@ export function PomodoroView() {
                   min={0}
                   max={100}
                   step={5}
-                  value={config.soundVolume}
-                  disabled={!config.soundEnabled}
+                  value={draftConfig.soundVolume}
+                  disabled={!draftConfig.soundEnabled}
                   aria-label={t.pomodoroSoundVolume}
                   onChange={(event) =>
-                    void updateConfig({
+                    void configSave.submit({
                       soundVolume: Number(event.target.value),
                     })
                   }
@@ -377,19 +399,19 @@ export function PomodoroView() {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    disabled={!config.soundEnabled || config.soundVolume === 0}
+                    disabled={!draftConfig.soundEnabled || draftConfig.soundVolume === 0}
                     className="rounded-lg border border-[var(--line)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-xs font-medium text-[var(--ink)] hover:bg-[var(--hover)] disabled:cursor-not-allowed disabled:opacity-50"
                     onClick={() =>
-                      playPomodoroCue("start", config.soundVolume)
+                      playPomodoroCue("start", draftConfig.soundVolume)
                     }
                   >
                     {t.pomodoroSoundPreviewStart}
                   </button>
                   <button
                     type="button"
-                    disabled={!config.soundEnabled || config.soundVolume === 0}
+                    disabled={!draftConfig.soundEnabled || draftConfig.soundVolume === 0}
                     className="rounded-lg border border-[var(--line)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-xs font-medium text-[var(--ink)] hover:bg-[var(--hover)] disabled:cursor-not-allowed disabled:opacity-50"
-                    onClick={() => playPomodoroCue("end", config.soundVolume)}
+                    onClick={() => playPomodoroCue("end", draftConfig.soundVolume)}
                   >
                     {t.pomodoroSoundPreviewEnd}
                   </button>
@@ -405,14 +427,15 @@ export function PomodoroView() {
             <div className="mt-3 max-w-xs">
               <ConfigInput
                 label={t.dailyFocusGoal}
-                value={config.dailyGoalMinutes}
+                value={draftConfig.dailyGoalMinutes}
                 max={1440}
                 onChange={(value) =>
-                  void updateConfig({ dailyGoalMinutes: value })
+                  void configSave.submit({ dailyGoalMinutes: value })
                 }
               />
             </div>
           </div>
+          </fieldset>
         </details>
       </div>
 

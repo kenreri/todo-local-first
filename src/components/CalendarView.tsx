@@ -11,6 +11,7 @@ import { useTodoStore } from "../store/todoStore";
 import { ui } from "../i18n/messages";
 import { TaskViewSwitch } from "./TaskViewSwitch";
 import { PageHeader } from "./PageHeader";
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
 
 export function CalendarView() {
   const locale = useTodoStore((s) => s.locale);
@@ -21,6 +22,28 @@ export function CalendarView() {
   const setTaskScheduledDate = useTodoStore((s) => s.setTaskScheduledDate);
   const t = ui(locale);
   const calendarRef = useRef<FullCalendar | null>(null);
+  const savingRef = useRef(false);
+  const { run, saving, failed } = useSaveFeedback();
+  const [retryMove, setRetryMove] = useState<{ taskId: string; date: string } | null>(null);
+
+  const saveMove = async (taskId: string, date: string, revert?: () => void) => {
+    if (savingRef.current) {
+      revert?.();
+      return;
+    }
+    savingRef.current = true;
+    const original = useTodoStore.getState().tasks.find((task) => task.id === taskId);
+    setRetryMove({ taskId, date });
+    const saved = await run(() => setTaskScheduledDate(taskId, date));
+    if (saved) setRetryMove(null);
+    else if (
+      calendarRef.current && original &&
+      useTodoStore.getState().tasks.find((task) => task.id === taskId) === original
+    ) revert?.();
+    // A newer persisted snapshot already replaced the event; do not undo it.
+    // Release only after reverting, so an older failure cannot undo a newer drop.
+    savingRef.current = false;
+  };
 
   const anchor = todayKey();
   const [visibleRange, setVisibleRange] = useState(() => ({
@@ -77,6 +100,11 @@ export function CalendarView() {
   return (
     <section className="min-w-0 space-y-6">
       <PageHeader title={t.tasks} description={t.calendarSubtitle} actions={<TaskViewSwitch />} />
+      {saving ? <p role="status" className="text-sm text-[var(--muted)]">{t.taskSaving}</p> : null}
+      {failed ? <div role="alert" className="flex flex-wrap items-center gap-2 text-sm text-[var(--danger)]">
+        <span>{t.taskSaveFailed}</span>
+        {retryMove ? <button type="button" disabled={saving} className="ui-button-secondary min-h-10 px-3 py-2" onClick={() => void saveMove(retryMove.taskId, retryMove.date)}>{locale === "zh" ? "重试改期" : "Retry reschedule"}</button> : null}
+      </div> : null}
       <div className="todo-calendar ui-card min-w-0 overflow-hidden p-3 md:p-5">
         <FullCalendar
           ref={calendarRef}
@@ -90,13 +118,16 @@ export function CalendarView() {
           }}
           height="auto"
           editable
+          eventAllow={() => !savingRef.current}
           datesSet={updateVisibleRange}
           events={events}
           eventClick={(info) => {
+            if (savingRef.current) return;
             const animeId = info.event.extendedProps.animeId as
               string | undefined;
             if (animeId) {
-              void setView("anime");
+              setRetryMove(null);
+              void run(() => setView("anime"));
               return;
             }
             const taskId = info.event.extendedProps.taskId as string;
@@ -114,7 +145,7 @@ export function CalendarView() {
               info.revert();
               return;
             }
-            void setTaskScheduledDate(taskId, date);
+            void saveMove(taskId, date, () => info.revert());
           }}
         />
       </div>

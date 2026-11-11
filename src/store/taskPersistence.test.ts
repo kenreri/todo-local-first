@@ -99,6 +99,51 @@ afterAll(() => {
 });
 
 describe("task writes preserve concurrent changes", () => {
+  it("keeps undefined task fields and clears only explicit nulls", async () => {
+    await db.tasks.update("root", { note: "kept", dueDate: "2026-11-20", scheduledTime: "09:30" });
+    await useTodoStore.getState().updateTask("root", { note: undefined, dueDate: undefined, scheduledTime: null });
+    expect(await db.tasks.get("root")).toMatchObject({ note: "kept", dueDate: "2026-11-20", scheduledTime: null });
+  });
+
+  it("rolls back every task tree when a later batch move fails", async () => {
+    useTodoStore.setState({ checkedIds: ["root", "other"] });
+    const failSecondTree = (changes: Partial<TaskRecord>, id: string) => {
+      if (id === "other" && changes.listId === "target") throw new Error("second tree failed");
+    };
+    db.tasks.hook("updating", failSecondTree);
+    try {
+      await expect(useTodoStore.getState().batchMove(["root", "other"], "target")).rejects.toThrow("second tree failed");
+    } finally {
+      db.tasks.hook("updating").unsubscribe(failSecondTree);
+    }
+    expect((await db.tasks.toArray()).map(row => row.listId)).toEqual(["source", "source", "source"]);
+    expect(useTodoStore.getState().checkedIds).toEqual(["root", "other"]);
+  });
+
+  it("keeps concurrent tag additions and removes only the requested tag", async () => {
+    const { addTaskTag, removeTaskTag } = useTodoStore.getState();
+    await Promise.all([addTaskTag("root", "first"), addTaskTag("root", "second")]);
+    expect((await db.tasks.get("root"))?.tags).toEqual(["first", "second"]);
+    await Promise.all([removeTaskTag("root", "first"), addTaskTag("root", "third")]);
+    expect((await db.tasks.get("root"))?.tags).toEqual(["second", "third"]);
+    await addTaskTag("root", "third");
+    expect((await db.tasks.get("root"))?.tags).toEqual(["second", "third"]);
+  });
+
+  it("removes exact legacy tag values without normalizing another tag", async () => {
+    await db.tasks.update("root", { tags: [" keep ", "keep", ""] });
+    await useTodoStore.getState().removeTaskTag("root", " keep ");
+    expect((await db.tasks.get("root"))?.tags).toEqual(["keep", ""]);
+    await useTodoStore.getState().removeTaskTag("root", "");
+    expect((await db.tasks.get("root"))?.tags).toEqual(["keep"]);
+  });
+
+  it("does not revive a deleted task through a late tag change", async () => {
+    await useTodoStore.getState().deleteTask("root");
+    await useTodoStore.getState().addTaskTag("root", "late");
+    expect(await db.tasks.get("root")).toMatchObject({ tags: [], deletedAt: expect.any(Number) });
+  });
+
   it("keeps both fields when edits are submitted together", async () => {
     const { updateTask } = useTodoStore.getState();
     await Promise.all([

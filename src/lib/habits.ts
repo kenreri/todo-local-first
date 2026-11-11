@@ -100,3 +100,18 @@ export function calculateHabitStats(
       scheduled === 0 ? 0 : Math.round((completed / scheduled) * 100),
   };
 }
+
+export type HabitEditFields = Pick<HabitRecord, 'title' | 'emoji' | 'frequency' | 'weekdays' | 'reminderTime'>;
+
+/** Preserve fields changed elsewhere while this explicit-save form was open. */
+export function habitEditPatch(before: HabitEditFields, after: HabitEditFields): Partial<HabitEditFields> {
+  const patch: Partial<HabitEditFields> = {};
+  if (before.title !== after.title) patch.title = after.title;
+  if (before.emoji !== after.emoji) patch.emoji = after.emoji;
+  if (before.frequency !== after.frequency) patch.frequency = after.frequency;
+  if (before.reminderTime !== after.reminderTime) patch.reminderTime = after.reminderTime;
+  const oldDays = [...new Set(before.weekdays)].sort();
+  const newDays = [...new Set(after.weekdays)].sort();
+  if (oldDays.length !== newDays.length || oldDays.some((day, index) => day !== newDays[index])) patch.weekdays = newDays;
+  return patch;
+}

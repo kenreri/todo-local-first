@@ -1,7 +1,11 @@
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
 import { ChevronDown, Edit3, Plus, Play, Search, Trash2, X } from "lucide-react";
 import {
   useEffect,
   useMemo,
+  useRef,
+  type Dispatch,
+  type SetStateAction,
   useState,
   type CSSProperties,
   type FormEvent,
@@ -9,6 +13,7 @@ import {
 } from "react";
 import { ui } from "../i18n/messages";
 import { DEFAULT_ANIME_EMOJI, animeProgress } from "../lib/anime";
+import { animeFormFromRecord, animeFormInput, animeFormPatch, type AnimeFormState } from "../lib/animeForm";
 import {
   getSubject,
   searchSubjects,
@@ -43,20 +48,6 @@ function posterGradient(id: string): CSSProperties {
 
 type AnimeFilter = "all" | AnimeStatus;
 
-interface AnimeFormState {
-  title: string;
-  emoji: string;
-  status: AnimeStatus;
-  airKind: AnimeAirKind;
-  scheduleMode: AnimeScheduleMode;
-  currentEpisode: number;
-  totalEpisodes: string;
-  watchWeekday: string;
-  reminderTime: string;
-  note: string;
-  bgmSubjectId: number | null;
-  bgmCoverUrl: string | null;
-}
 
 const emptyForm: AnimeFormState = {
   title: "",
@@ -135,16 +126,24 @@ function scheduleLabel(
 export function AnimeView() {
   const locale = useTodoStore((state) => state.locale);
   const anime = useTodoStore((state) => state.anime);
-  const createAnime = useTodoStore((state) => state.createAnime);
-  const updateAnime = useTodoStore((state) => state.updateAnime);
-  const incrementEpisode = useTodoStore((state) => state.incrementAnimeEpisode);
-  const deleteAnime = useTodoStore((state) => state.deleteAnime);
+  const persistCreateAnime = useTodoStore((state) => state.createAnime);
+  const persistUpdateAnime = useTodoStore((state) => state.updateAnime);
+  const persistIncrementEpisode = useTodoStore((state) => state.incrementAnimeEpisode);
+  const persistDeleteAnime = useTodoStore((state) => state.deleteAnime);
   const t = ui(locale);
+  const { run, saving, failed } = useSaveFeedback();
+  const createAnime = (...args: Parameters<typeof persistCreateAnime>) => run(() => persistCreateAnime(...args));
+  const updateAnime = (...args: Parameters<typeof persistUpdateAnime>) => run(() => persistUpdateAnime(...args));
+  const incrementEpisode = (...args: Parameters<typeof persistIncrementEpisode>) => run(() => persistIncrementEpisode(...args));
+  const deleteAnime = (...args: Parameters<typeof persistDeleteAnime>) => run(() => persistDeleteAnime(...args));
+
   const [filter, setFilter] = useState<AnimeFilter>("all");
   const [formOpen, setFormOpen] = useState(false);
   const [deletePendingId, setDeletePendingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<AnimeFormState>(emptyForm);
+  const [baseline, setBaseline] = useState<AnimeFormState>(emptyForm);
+  const [formSession, setFormSession] = useState(0);
   const [notificationPermission, setNotificationPermission] = useState<
     NotificationPermission | "unsupported"
   >(() => ("Notification" in window ? Notification.permission : "unsupported"));
@@ -158,62 +157,37 @@ export function AnimeView() {
   const closeForm = () => {
     setFormOpen(false);
     setEditingId(null);
+    setFormSession(session => session + 1);
+    setBaseline(emptyForm);
     setForm({ ...emptyForm });
   };
 
   const openCreate = () => {
+    if (saving) return;
     setEditingId(null);
+    setFormSession(session => session + 1);
+    setBaseline(emptyForm);
     setForm({ ...emptyForm });
     setFormOpen(true);
   };
 
   const openEdit = (item: AnimeRecord) => {
+    if (saving) return;
     setEditingId(item.id);
-    setForm({
-      title: item.title,
-      emoji: item.emoji,
-      status: item.status,
-      airKind: item.airKind === "finished" ? "finished" : "ongoing",
-      scheduleMode:
-        item.scheduleMode === "weekly" || item.scheduleMode === "daily"
-          ? item.scheduleMode
-          : "none",
-      currentEpisode: item.currentEpisode,
-      totalEpisodes: item.totalEpisodes?.toString() ?? "",
-      watchWeekday: item.watchWeekday?.toString() ?? "",
-      reminderTime: item.reminderTime ?? "",
-      note: item.note,
-      bgmSubjectId: item.bgmSubjectId,
-      bgmCoverUrl: item.bgmCoverUrl,
-    });
+    const next = animeFormFromRecord(item);
+    setFormSession(session => session + 1);
+    setBaseline(next);
+    setForm(next);
     setFormOpen(true);
   };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!form.title.trim()) return;
-    const scheduleMode = form.scheduleMode;
-    const payload = {
-      title: form.title,
-      emoji: form.emoji,
-      status: form.status,
-      airKind: form.airKind,
-      scheduleMode,
-      currentEpisode: form.currentEpisode,
-      totalEpisodes:
-        form.totalEpisodes === "" ? null : Number(form.totalEpisodes),
-      watchWeekday:
-        scheduleMode === "weekly" && form.watchWeekday !== ""
-          ? Number(form.watchWeekday)
-          : null,
-      reminderTime: scheduleMode === "none" ? null : form.reminderTime || null,
-      note: form.note,
-      bgmSubjectId: form.bgmSubjectId,
-      bgmCoverUrl: form.bgmCoverUrl,
-    };
-    if (editingId) await updateAnime(editingId, payload);
-    else await createAnime(payload);
-    closeForm();
+    const saved = editingId
+      ? await updateAnime(editingId, animeFormPatch(baseline, form))
+      : await createAnime(animeFormInput(form));
+    if (saved) closeForm();
   };
 
   const statusLabels: Record<AnimeStatus, string> = {
@@ -235,7 +209,8 @@ export function AnimeView() {
   ];
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6" aria-busy={saving}>
+      {failed ? <p role="alert" className="ui-card-flat p-3 text-sm text-[var(--danger)]">{locale === "zh" ? "操作未保存，请重试。编辑内容已保留。" : "Could not save. Your edits are kept; please retry."}</p> : null}
       <PageHeader
         title={t.animeTitle}
         description={t.animeSubtitle}
@@ -272,11 +247,13 @@ export function AnimeView() {
 
       {formOpen ? (
         <AnimeForm
+          key={formSession}
           form={form}
           editingId={editingId}
           locale={locale}
           onChange={setForm}
-          onCancel={closeForm}
+          onCancel={() => { if (!saving) closeForm(); }}
+          saving={saving}
           onSubmit={submit}
         />
       ) : null}
@@ -346,7 +323,7 @@ export function AnimeView() {
                         aria-label={deletePendingId === item.id ? t.confirmDeleteAction : t.animeDelete}
                         className="rounded-[var(--radius-small)] p-1.5 text-[var(--danger)] hover:bg-[var(--danger-soft)]"
                         onClick={() => {
-                          if (deletePendingId === item.id) { void deleteAnime(item.id); setDeletePendingId(null); }
+                          if (deletePendingId === item.id) { void deleteAnime(item.id).then(saved => { if (saved) setDeletePendingId(null); }); }
                           else setDeletePendingId(item.id);
                         }}
                       >
@@ -422,16 +399,19 @@ function AnimeForm({
   onChange,
   onCancel,
   onSubmit,
+  saving,
 }: {
   form: AnimeFormState;
   editingId: string | null;
   locale: "zh" | "en";
-  onChange: (next: AnimeFormState) => void;
+  onChange: Dispatch<SetStateAction<AnimeFormState>>;
   onCancel: () => void;
+  saving: boolean;
   onSubmit: (event: FormEvent) => void;
 }) {
   const t = ui(locale);
   const [customOpen, setCustomOpen] = useState(editingId != null);
+  const [binding, setBinding] = useState(false);
   const showDetails = customOpen;
   const showWeekday = form.scheduleMode === "weekly";
   const showTime =
@@ -440,8 +420,9 @@ function AnimeForm({
   return (
     <form
       className="ui-card p-5 md:p-6"
-      onSubmit={onSubmit}
+      onSubmit={event => { if (binding) event.preventDefault(); else onSubmit(event); }}
     >
+      <fieldset disabled={saving}>
       <div className="flex items-center justify-between gap-3">
         <h3 className="text-lg font-semibold text-[var(--ink)]">
           {editingId ? t.animeEdit : t.animeAdd}
@@ -465,6 +446,7 @@ function AnimeForm({
         autoFocusSearch={editingId == null}
         onChange={onChange}
         onNoResult={() => setCustomOpen(true)}
+        onBusyChange={setBinding}
       />
 
       <button
@@ -484,7 +466,7 @@ function AnimeForm({
           {t.animeName}
           <input
             required
-            className="rounded-xl border border-[var(--line)] px-3 py-2 text-[var(--ink)]"
+            className="ui-input px-3 py-2"
             placeholder={t.animeNamePlaceholder}
             value={form.title}
             onChange={(event) =>
@@ -495,7 +477,7 @@ function AnimeForm({
         <label className="grid gap-1.5 text-sm text-[var(--muted)]">
           {t.habitEmoji}
           <input
-            className="rounded-xl border border-[var(--line)] px-3 py-2 text-[var(--ink)]"
+            className="ui-input px-3 py-2"
             value={form.emoji}
             onChange={(event) =>
               onChange({ ...form, emoji: event.target.value })
@@ -505,7 +487,7 @@ function AnimeForm({
         <label className="grid gap-1.5 text-sm text-[var(--muted)]">
           {t.animeStatus}
           <select
-            className="rounded-xl border border-[var(--line)] px-3 py-2"
+            className="ui-input px-3 py-2"
             value={form.status}
             onChange={(event) =>
               onChange({ ...form, status: event.target.value as AnimeStatus })
@@ -520,7 +502,7 @@ function AnimeForm({
         <label className="grid gap-1.5 text-sm text-[var(--muted)]">
           {t.animeAirKind}
           <select
-            className="rounded-xl border border-[var(--line)] px-3 py-2"
+            className="ui-input px-3 py-2"
             value={form.airKind}
             onChange={(event) =>
               onChange({
@@ -536,7 +518,7 @@ function AnimeForm({
         <label className="grid gap-1.5 text-sm text-[var(--muted)]">
           {t.animeSchedule}
           <select
-            className="rounded-xl border border-[var(--line)] px-3 py-2"
+            className="ui-input px-3 py-2"
             value={form.scheduleMode}
             onChange={(event) =>
               onChange({
@@ -555,7 +537,7 @@ function AnimeForm({
           <input
             type="number"
             min="0"
-            className="rounded-xl border border-[var(--line)] px-3 py-2 text-[var(--ink)]"
+            className="ui-input px-3 py-2"
             value={form.currentEpisode}
             onChange={(event) =>
               onChange({ ...form, currentEpisode: Number(event.target.value) })
@@ -567,7 +549,7 @@ function AnimeForm({
           <input
             type="number"
             min="1"
-            className="rounded-xl border border-[var(--line)] px-3 py-2 text-[var(--ink)]"
+            className="ui-input px-3 py-2"
             value={form.totalEpisodes}
             onChange={(event) =>
               onChange({ ...form, totalEpisodes: event.target.value })
@@ -578,7 +560,7 @@ function AnimeForm({
           <label className="grid gap-1.5 text-sm text-[var(--muted)]">
             {t.animeWatchDay}
             <select
-              className="rounded-xl border border-[var(--line)] px-3 py-2"
+              className="ui-input px-3 py-2"
               value={form.watchWeekday}
               onChange={(event) =>
                 onChange({ ...form, watchWeekday: event.target.value })
@@ -598,7 +580,7 @@ function AnimeForm({
             {t.animeWatchTime}
             <input
               type="time"
-              className="rounded-xl border border-[var(--line)] px-3 py-2 text-[var(--ink)]"
+              className="ui-input px-3 py-2"
               value={form.reminderTime}
               onChange={(event) =>
                 onChange({ ...form, reminderTime: event.target.value })
@@ -610,7 +592,7 @@ function AnimeForm({
           {t.animeNote}
           <textarea
             rows={3}
-            className="rounded-xl border border-[var(--line)] px-3 py-2 text-[var(--ink)]"
+            className="ui-input px-3 py-2"
             placeholder={t.animeNotePlaceholder}
             value={form.note}
             onChange={(event) =>
@@ -632,11 +614,12 @@ function AnimeForm({
         <button
           type="submit"
           className="ui-button-primary px-4 py-2 disabled:opacity-50"
-          disabled={!form.title.trim()}
+          disabled={!form.title.trim() || binding}
         >
           {t.animeSave}
         </button>
       </div>
+      </fieldset>
     </form>
   );
 }
@@ -648,13 +631,15 @@ function BangumiBindField({
   autoFocusSearch = false,
   onChange,
   onNoResult,
+  onBusyChange,
 }: {
   form: AnimeFormState;
   editingId: string | null;
   locale: "zh" | "en";
   autoFocusSearch?: boolean;
-  onChange: (next: AnimeFormState) => void;
+  onChange: Dispatch<SetStateAction<AnimeFormState>>;
   onNoResult?: () => void;
+  onBusyChange: (busy: boolean) => void;
 }) {
   const t = ui(locale);
   const linkAnimeBgm = useTodoStore((state) => state.linkAnimeBgm);
@@ -666,22 +651,34 @@ function BangumiBindField({
   const linkedCover = useAnimeCover(form.bgmCoverUrl);
   const [error, setError] = useState<"none" | "error" | "empty">("none");
 
+  const searchRequest = useRef<AbortController | null>(null);
+  const detailRequest = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  const { run: saveBinding, saving: bindingSaving, failed: bindingFailed } = useSaveFeedback();
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      searchRequest.current?.abort();
+      detailRequest.current?.abort();
+    };
+  }, []);
+  useEffect(() => { onBusyChange(fetchingDetail || bindingSaving); }, [fetchingDetail, bindingSaving, onBusyChange]);
+
   const runSearch = async () => {
     const query = keyword.trim() || form.title.trim();
-    if (!query) return;
+    if (!query || fetchingDetail || bindingSaving) return;
+    searchRequest.current?.abort();
+    const controller = new AbortController();
+    searchRequest.current = controller;
     setSearching(true);
     setError("none");
     setResults([]);
-    const controller = new AbortController();
     const items = await searchSubjects(query, controller.signal);
+    if (controller.signal.aborted || !mounted.current) return;
     setSearching(false);
-    if (items == null) {
-      setError("error");
-      onNoResult?.();
-      return;
-    }
-    if (items.length === 0) {
-      setError("empty");
+    if (items == null || items.length === 0) {
+      setError(items == null ? "error" : "empty");
       onNoResult?.();
       return;
     }
@@ -689,42 +686,49 @@ function BangumiBindField({
   };
 
   const bind = async (info: BangumiSubjectInfo) => {
+    if (fetchingDetail || bindingSaving) return;
+    detailRequest.current?.abort();
+    const controller = new AbortController();
+    detailRequest.current = controller;
     setFetchingDetail(true);
-    const detail = (await getSubject(info.subjectId)) ?? info;
-    setFetchingDetail(false);
+    const requestedTitle = form.title;
+    const requestedEpisodes = form.totalEpisodes;
+    const detail = (await getSubject(info.subjectId, controller.signal)) ?? info;
+    if (controller.signal.aborted || !mounted.current) return;
     const episodes = detail.totalEpisodes ?? info.totalEpisodes;
-    onChange({
-      ...form,
-      title: detail.title.trim() || info.title.trim() || form.title,
-      totalEpisodes: episodes != null ? String(episodes) : form.totalEpisodes,
+    const saved = !editingId || await saveBinding(() => linkAnimeBgm(editingId, {
+      subjectId: detail.subjectId,
+      title: detail.title,
+      coverUrl: detail.coverUrl ?? info.coverUrl,
+      totalEpisodes: episodes,
+    }));
+    if (controller.signal.aborted || !mounted.current) return;
+    setFetchingDetail(false);
+    if (!saved) return;
+    // Merge into the latest draft. Typing while the network is pending is retained.
+    onChange(current => ({
+      ...current,
+      title: current.title === requestedTitle ? detail.title.trim() || info.title.trim() || current.title : current.title,
+      totalEpisodes: current.totalEpisodes === requestedEpisodes && episodes != null ? String(episodes) : current.totalEpisodes,
       bgmSubjectId: detail.subjectId,
       bgmCoverUrl: detail.coverUrl ?? info.coverUrl,
-    });
-    if (editingId) {
-      await linkAnimeBgm(editingId, {
-        subjectId: detail.subjectId,
-        title: detail.title,
-        coverUrl: detail.coverUrl ?? info.coverUrl,
-        totalEpisodes: episodes,
-      });
-    }
+    }));
     setResults([]);
     setError("none");
   };
 
   const unlink = async () => {
-    onChange({ ...form, bgmSubjectId: null, bgmCoverUrl: null });
-    if (editingId) {
-      await updateAnime(editingId, {
-        bgmSubjectId: null,
-        bgmCoverUrl: null,
-      });
-    }
+    if (fetchingDetail || bindingSaving) return;
+    const saved = !editingId || await saveBinding(() => updateAnime(editingId, {
+      bgmSubjectId: null, bgmCoverUrl: null,
+    }));
+    if (saved && mounted.current) onChange(current => ({ ...current, bgmSubjectId: null, bgmCoverUrl: null }));
   };
 
   return (
     <div className="mt-4 space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
       <p className="text-sm font-medium text-[var(--ink)]">{t.animeBindBgm}</p>
+      {bindingFailed ? <p role="alert" className="text-sm text-[var(--danger)]">{locale === "zh" ? "绑定未保存，请重试。编辑内容已保留。" : "Could not save the link. Your edits are kept; please retry."}</p> : null}
       {form.bgmSubjectId != null ? (
         <div className="flex flex-wrap items-center gap-3">
           {linkedCover ? (
@@ -747,6 +751,7 @@ function BangumiBindField({
           <button
             type="button"
             className="rounded-lg px-3 py-1.5 text-sm text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--ink)]"
+            disabled={fetchingDetail || bindingSaving}
             onClick={() => void unlink()}
           >
             {t.animeBgmUnlink}
@@ -761,7 +766,7 @@ function BangumiBindField({
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") {
+            if (event.key === "Enter" && !event.nativeEvent.isComposing && event.keyCode !== 229) {
               event.preventDefault();
               void runSearch();
             }
@@ -770,7 +775,7 @@ function BangumiBindField({
         <button
           type="button"
           className="ui-button-secondary inline-flex items-center gap-2 px-3 py-2 text-sm"
-          disabled={searching || fetchingDetail}
+          disabled={searching || fetchingDetail || bindingSaving}
           onClick={() => void runSearch()}
         >
           <Search className="size-4" /> {t.animeBgmSearch}
@@ -795,7 +800,7 @@ function BangumiBindField({
               <button
                 type="button"
                 className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-[var(--hover)]"
-                disabled={fetchingDetail}
+                disabled={fetchingDetail || bindingSaving}
                 onClick={() => void bind(item)}
               >
                 {item.coverUrl ? (

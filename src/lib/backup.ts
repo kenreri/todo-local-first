@@ -1,4 +1,5 @@
 import { db, now } from "../db";
+import { allowRestoreTransaction } from "./restoreGuard";
 import { validScheduledTime } from "./taskPlanning";
 import { normalizeAnimeRecord } from "./anime";
 import { normalizePomodoroConfig } from "./pomodoroConfig";
@@ -130,13 +131,21 @@ export function downloadCsv(filename: string, csv: string) {
   triggerDownload(filename, blob);
 }
 
-export async function importBackupJson(payload: unknown) {
+export function prepareBackup(payload: unknown) {
   const validated = validateBackupPayload(payload);
   // Decode before starting the write transaction; invalid bytes never clear data.
   const attachmentBlobs = validated.attachments.map(attachment => ({
     id: attachment.id,
     data: new Blob([Uint8Array.from(atob(attachment.base64), char => char.charCodeAt(0))], { type: attachment.mime }),
   }));
+  return { validated, attachmentBlobs };
+}
+
+export async function importBackupJson(payload: unknown) {
+  return replacePreparedBackup(prepareBackup(payload));
+}
+
+export async function replacePreparedBackup({ validated, attachmentBlobs }: ReturnType<typeof prepareBackup>) {
   await db.transaction(
     "rw",
     [
@@ -152,6 +161,7 @@ export async function importBackupJson(payload: unknown) {
       db.attachmentBlobs,
     ],
     async () => {
+      allowRestoreTransaction();
       await db.lists.clear();
       await db.tasks.clear();
       await db.pomodoroRecords.clear();
@@ -201,9 +211,8 @@ function triggerDownload(filename: string, blob: Blob) {
   URL.revokeObjectURL(url);
 }
 
-export async function readJsonFile(file: File): Promise<BackupPayload> {
-  const text = await file.text();
-  return validateBackupPayload(JSON.parse(text));
+export async function readJsonFile(file: File): Promise<unknown> {
+  return JSON.parse(await file.text());
 }
 
 export function validateBackupPayload(value: unknown): BackupPayload {

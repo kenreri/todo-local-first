@@ -1,7 +1,10 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
 import { useMemo } from "react";
 import { CalendarDays, PanelsTopLeft, Plus, Sparkles } from "lucide-react";
 import { ui } from "../i18n/messages";
-import { addDays, todayKey } from "../lib/dates";
+import { addDays } from "../lib/dates";
+import { useLocalDate } from "../hooks/useLocalDate";
 import { comparePriorityDesc, normalizePriority } from "../lib/priority";
 import { useTodoStore } from "../store/todoStore";
 import { QuickCapture } from "./QuickCapture";
@@ -13,8 +16,9 @@ export function ListsOverview() {
   const lists = useTodoStore((state) => state.lists);
   const tasks = useTodoStore((state) => state.tasks);
   const selectList = useTodoStore((state) => state.selectList);
-  const setView = useTodoStore((state) => state.setView);
+  const navigation = useViewNavigation();
   const t = ui(locale);
+  const today = useLocalDate();
 
   // 一次性按清单分组任务
   const grouped = useMemo(() => {
@@ -36,7 +40,6 @@ export function ListsOverview() {
 
   // 过期 / 本周到期（按 dueDate）按清单分组
   const dueStats = useMemo(() => {
-    const today = todayKey();
     const weekEnd = addDays(today, 7);
     const result = new Map<
       string,
@@ -53,7 +56,7 @@ export function ListsOverview() {
       result.set(task.listId, slot);
     }
     return result;
-  }, [tasks]);
+  }, [tasks, today]);
 
   // 每个清单最近 3 个未完成任务（按优先级降序 + 创建时间）
   const recentByList = useMemo(() => {
@@ -76,18 +79,16 @@ export function ListsOverview() {
     return map;
   }, [tasks, lists]);
 
-  const openList = async (id: string) => {
-    selectList(id);
-    await setView("list");
-  };
+  const openList = (id: string) => navigation.navigate("list", () => selectList(id));
 
   return (
-    <section className="space-y-6">
+    <section className="min-w-0 space-y-6">
       <PageHeader
         title={t.listsOverview}
         description={t.listsOverviewSubtitle}
         actions={<TaskViewSwitch />}
       />
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
       <div className="ui-card p-4"><QuickCapture /></div>
       {lists.length === 0 ? (
         <div className="ui-card flex flex-col items-center gap-3 p-10 text-center">
@@ -116,7 +117,7 @@ export function ListsOverview() {
             return (
               <article
                 key={list.id}
-                className="ui-card flex flex-col gap-4 p-5"
+                className="ui-card flex min-w-0 flex-col gap-4 p-5"
               >
                 <header className="flex items-start justify-between gap-3">
                   <div className="flex min-w-0 items-center gap-2">
@@ -149,7 +150,7 @@ export function ListsOverview() {
                   />
                 </div>
 
-                <div className="grid gap-1.5 text-sm">
+                <div className="grid min-w-0 grid-cols-1 gap-1.5 text-sm">
                   <div className="flex items-center justify-between text-xs text-[var(--muted)]">
                     <span>{t.listsRecentTasks}</span>
                     <span className="tabular-nums">
@@ -189,6 +190,7 @@ export function ListsOverview() {
                 <div className="mt-auto flex flex-wrap gap-2">
                   <button
                     type="button"
+                    disabled={navigation.saving}
                     onClick={() => void openList(list.id)}
                     className="ui-button-primary inline-flex flex-1 items-center justify-center gap-1.5 px-3 py-2 text-sm"
                   >
@@ -197,9 +199,9 @@ export function ListsOverview() {
                   </button>
                   <button
                     type="button"
+                    disabled={navigation.saving}
                     onClick={() => {
-                      selectList(list.id);
-                      void setView("calendar");
+                      void navigation.navigate("calendar", () => selectList(list.id));
                     }}
                     className="ui-button-secondary inline-flex items-center justify-center gap-1.5 px-3 py-2 text-sm"
                     title={t.viewCalendar}

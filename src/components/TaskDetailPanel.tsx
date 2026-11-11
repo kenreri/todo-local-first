@@ -1,3 +1,6 @@
+import { usePendingPatch } from "../hooks/usePendingPatch";
+import { SaveStatus } from "./SaveStatus";
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { ArrowLeft, Check, Timer, Trash2, X } from "lucide-react";
@@ -38,6 +41,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
     [allTasks, task],
   );
   const updateTask = useTodoStore((s) => s.updateTask);
+  const addTaskTag = useTodoStore((s) => s.addTaskTag);
+  const removeTaskTag = useTodoStore((s) => s.removeTaskTag);
   const deleteTask = useTodoStore((s) => s.deleteTask);
   const toggleTask = useTodoStore((s) => s.toggleTask);
   const createTask = useTodoStore((s) => s.createTask);
@@ -47,43 +52,70 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
   const pomodoroPhase = usePomodoroStore((s) => s.phase);
   const focusSessionStartedAt = usePomodoroStore((s) => s.sessionStartedAt);
   const t = ui(locale);
+  const { run: saveExtra, saving: extraSaving, failed: extraFailed } = useSaveFeedback();
   const focusBindingLocked = isFocusBindingLocked(
     pomodoroPhase,
     focusSessionStartedAt,
   );
 
+  const propertySave = usePendingPatch<Pick<TaskRecord, "priority" | "listId" | "dueDate" | "scheduledDate" | "scheduledTime" | "repeatRule">>(async patch => {
+    if (patch.listId && !(await persistDraft())) throw new Error("Text draft could not be saved");
+    await updateTask(taskId, patch);
+  });
+  const flushProperties = propertySave.flush;
+  const saveProperties = propertySave.submit;
+  const retryExtraRef = useRef<(() => Promise<unknown>) | null>(null);
+  const runExtra = (operation: () => Promise<unknown>) => saveExtra(async () => {
+    retryExtraRef.current = operation;
+    await operation();
+    retryExtraRef.current = null;
+  });
+  const properties = { ...task, ...propertySave.patch };
+  const listId = properties.listId ?? "";
+  const scheduledTime = properties.scheduledTime ?? "";
+  const priority = properties.priority ?? "none";
+  const dueDate = properties.dueDate ?? "";
+  const scheduledDate = properties.scheduledDate ?? "";
+  const repeatFreq = properties.repeatRule?.frequency ?? "none";
+  const repeatInterval = properties.repeatRule?.interval ?? 1;
+  const repeatWeekdays = properties.repeatRule?.weekdays ?? [];
+  const repeatEndDate = properties.repeatRule?.endDate ?? "";
   const [title, setTitle] = useState(task?.title ?? "");
   const [note, setNote] = useState(task?.note ?? "");
-  const [priority, setPriority] = useState<Priority>(task?.priority ?? "none");
-  const [dueDate, setDueDate] = useState(task?.dueDate ?? "");
-  const [scheduledDate, setScheduledDate] = useState(
-    task?.scheduledDate ?? "",
-  );
   const [tagDraft, setTagDraft] = useState("");
   const [subtaskDraft, setSubtaskDraft] = useState("");
-  const [repeatFreq, setRepeatFreq] = useState<"none" | RepeatFrequency>(
-    task?.repeatRule?.frequency ?? "none",
-  );
-  const [repeatInterval, setRepeatInterval] = useState(
-    task?.repeatRule?.interval ?? 1,
-  );
-  const [repeatWeekdays, setRepeatWeekdays] = useState<number[]>(
-    task?.repeatRule?.weekdays ?? [],
-  );
-  const [repeatEndDate, setRepeatEndDate] = useState(
-    task?.repeatRule?.endDate ?? "",
-  );
   const [saveState, setSaveState] = useState<TaskSaveState>("saved");
   const [closing, setClosing] = useState(false);
   const [deletePending, setDeletePending] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const titleDraftRef = useRef(title);
   const noteDraftRef = useRef(note);
+  const savedTextRef = useRef({ title: task?.title ?? "", note: task?.note ?? "" });
+  const textRevision = useRef(0);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  useEffect(() => {
+    if (!task) return;
+    if (titleDraftRef.current === savedTextRef.current.title) {
+      titleDraftRef.current = task.title;
+      savedTextRef.current.title = task.title;
+      setTitle(task.title);
+    }
+    if (noteDraftRef.current === savedTextRef.current.note) {
+      noteDraftRef.current = task.note;
+      savedTextRef.current.note = task.note;
+      setNote(task.note);
+    }
+  }, [task]);
   const saveQueueRef = useRef<Promise<boolean>>(Promise.resolve(true));
   const previousFocusRef = useRef<HTMLElement | null>(null);
 
   const persistDraft = useCallback(() => {
     const save = async () => {
+      if (!mounted.current) return false;
       const rawTitle = titleDraftRef.current;
       const nextTitle = rawTitle.trim();
       const nextNote = noteDraftRef.current;
@@ -99,8 +131,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
       if (!currentTask) return true;
 
       const patch: Partial<Pick<TaskRecord, "title" | "note">> = {};
-      if (nextTitle !== currentTask.title) patch.title = nextTitle;
-      if (nextNote !== currentTask.note) patch.note = nextNote;
+      if (nextTitle !== savedTextRef.current.title) patch.title = nextTitle;
+      if (nextNote !== savedTextRef.current.note) patch.note = nextNote;
       if (Object.keys(patch).length === 0) {
         setSaveState("saved");
         return true;
@@ -109,20 +141,21 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
       setSaveState("saving");
       try {
         await updateTask(taskId, patch);
-        if (
+        if (!mounted.current) return false;
+        savedTextRef.current = { ...savedTextRef.current, ...patch };
+        const unchanged =
           titleDraftRef.current === rawTitle &&
-          noteDraftRef.current === nextNote
-        ) {
+          noteDraftRef.current === nextNote;
+        if (unchanged) {
           setTitle(nextTitle);
           titleDraftRef.current = nextTitle;
           setSaveState("saved");
         } else {
           setSaveState("dirty");
         }
-        return true;
-      } catch (error) {
-        console.error(error);
-        setSaveState("error");
+        return unchanged;
+      } catch {
+        if (mounted.current) setSaveState("error");
         return false;
       }
     };
@@ -134,26 +167,30 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
 
   const closePanel = useCallback(async () => {
     if (closing) return;
+    const revision = textRevision.current;
     setClosing(true);
-    const saved = await persistDraft();
-    if (saved) selectTask(null);
+    const saved = await persistDraft() && await flushProperties();
+    if (!mounted.current) return;
+    if (saved && revision === textRevision.current && !retryExtraRef.current && useTodoStore.getState().selectedTaskId === taskId) selectTask(null);
     else setClosing(false);
-  }, [closing, persistDraft, selectTask]);
+  }, [closing, persistDraft, flushProperties, selectTask, taskId]);
 
   const moveToList = useCallback(
     async (listId: string) => {
-      if (!(await persistDraft())) return;
-      await updateTask(taskId, { listId });
+      await saveProperties({ listId });
     },
-    [persistDraft, taskId, updateTask],
+    [saveProperties],
   );
 
   const startTaskFocus = useCallback(async () => {
-    if (!(await persistDraft())) return;
+    const revision = textRevision.current;
+    if (!(await persistDraft()) || !(await flushProperties()) || !mounted.current) return;
+    if (revision !== textRevision.current || useTodoStore.getState().selectedTaskId !== taskId) return;
+    await setView("pomodoro");
+    if (!mounted.current || revision !== textRevision.current || useTodoStore.getState().selectedTaskId !== taskId || useTodoStore.getState().view !== "pomodoro") return;
     if (!focusBindingLocked) bindTask(taskId);
     selectTask(null);
-    await setView("pomodoro");
-  }, [bindTask, focusBindingLocked, persistDraft, selectTask, setView, taskId]);
+  }, [bindTask, focusBindingLocked, persistDraft, flushProperties, selectTask, setView, taskId]);
 
   useEffect(() => {
     previousFocusRef.current ??= document.activeElement as HTMLElement | null;
@@ -201,7 +238,9 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
 
   if (!task) return null;
 
-  const saveLabel =
+  const saveLabel = propertySave.failed || extraFailed
+    ? t.taskSaveFailed
+    : propertySave.saving || extraSaving ? t.taskSaving :
     saveState === "saving"
       ? t.taskSaving
       : saveState === "dirty"
@@ -217,10 +256,11 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
     interval: number,
     weekdays = repeatWeekdays,
     endDate = repeatEndDate,
-    baseDate = dueDate || task.dueDate || todayKey(),
+    baseDate = dueDate || todayKey(),
+    nextDueDate = dueDate || baseDate,
   ) => {
     if (frequency === "none") {
-      void updateTask(task.id, { repeatRule: null });
+      void saveProperties({ repeatRule: null });
       return;
     }
     const baseDay = parseDateKey(baseDate).getDay();
@@ -239,10 +279,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         frequency === "monthly" ? parseDateKey(baseDate).getDate() : undefined,
       endDate: endDate || null,
     };
-    void updateTask(task.id, {
-      repeatRule: rule,
-      dueDate: task.dueDate ?? baseDate,
-    });
+    void saveProperties({ repeatRule: rule, dueDate: nextDueDate });
   };
 
   /* ---------- 共用字段片段（同一份状态，双端各渲染一份，单端可见） ---------- */
@@ -251,8 +288,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
     <label className="block space-y-1.5">
       <span className="text-sm text-[var(--muted)]">{t.lists}</span>
       <select
-        value={task.listId}
-        onChange={(event) => void moveToList(event.target.value)}
+        value={listId}
+        onChange={(event) => { void moveToList(event.target.value); }}
         className={fieldClass}
       >
         {lists.map((list) => (
@@ -271,8 +308,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         value={priority}
         onChange={(e) => {
           const next = e.target.value as Priority;
-          setPriority(next);
-          void updateTask(task.id, { priority: next });
+          void saveProperties({ priority: next });
         }}
         className={fieldClass}
       >
@@ -289,7 +325,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
       type="button"
       disabled={task.completedAt != null && !focusBindingLocked}
       title={focusBindingLocked ? t.focusBindingLocked : undefined}
-      onClick={() => void startTaskFocus()}
+      onClick={() => void runExtra(startTaskFocus)}
       className="ui-button-primary inline-flex items-center justify-center gap-2 self-end px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <Timer className="size-4" />
@@ -302,7 +338,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
       type="button"
       disabled={task.completedAt != null && !focusBindingLocked}
       title={focusBindingLocked ? t.focusBindingLocked : undefined}
-      onClick={() => void startTaskFocus()}
+      onClick={() => void runExtra(startTaskFocus)}
       className="ui-button-primary inline-flex w-full items-center justify-center gap-2 px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
     >
       <Timer className="size-4" />
@@ -318,6 +354,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         onChange={(e) => {
           const next = e.target.value;
           setNote(next);
+          textRevision.current++;
           noteDraftRef.current = next;
           setSaveState("dirty");
         }}
@@ -337,8 +374,6 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         value={dueDate}
         onChange={(e) => {
           const next = e.target.value;
-          setDueDate(next);
-          void updateTask(task.id, { dueDate: next || null });
           if (next && repeatFreq !== "none") {
             saveRepeat(
               repeatFreq,
@@ -346,13 +381,9 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
               repeatWeekdays,
               repeatEndDate,
               next,
+              next,
             );
-          }
-        }}
-        onBlur={(event) => {
-          const next = event.target.value;
-          setDueDate(next);
-          void updateTask(task.id, { dueDate: next || null });
+          } else void saveProperties({ dueDate: next || null });
         }}
         className={fieldClass}
       />
@@ -366,7 +397,6 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         value={repeatFreq}
         onChange={(e) => {
           const next = e.target.value as "none" | RepeatFrequency;
-          setRepeatFreq(next);
           saveRepeat(next, repeatInterval);
         }}
         className={fieldClass}
@@ -390,7 +420,6 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         disabled={repeatFreq === "none"}
         onChange={(e) => {
           const next = Math.max(1, Number(e.target.value) || 1);
-          setRepeatInterval(next);
           if (repeatFreq !== "none") saveRepeat(repeatFreq, next);
         }}
         className={cn(fieldClass, "disabled:opacity-50")}
@@ -422,7 +451,6 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
                   ? repeatWeekdays.filter((item) => item !== weekday)
                   : [...repeatWeekdays, weekday];
                 if (next.length === 0) return;
-                setRepeatWeekdays(next);
                 saveRepeat(repeatFreq, repeatInterval, next, repeatEndDate);
               }}
             >
@@ -443,7 +471,6 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         value={repeatEndDate}
         onChange={(e) => {
           const next = e.target.value;
-          setRepeatEndDate(next);
           saveRepeat(repeatFreq, repeatInterval, repeatWeekdays, next);
         }}
         className={fieldClass}
@@ -454,7 +481,9 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
   const planSection = (
     <section className="space-y-2">
       <h3 className={sectionTitleClass}>{t.planTask}</h3>
-      <TaskScheduleControl task={task} onChange={(date) => setScheduledDate(date ?? "")} />
+      <TaskScheduleControl task={task} saveDate={date => {
+        return saveProperties({ scheduledDate: date, ...(!date ? { scheduledTime: null } : {}) });
+      }} />
     </section>
   );
   const timeSection = (
@@ -462,9 +491,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
       <summary className="min-h-10 cursor-pointer py-2 text-sm font-semibold text-[var(--muted)]">{t.taskMore}{dueDate ? " · " + t.optionalDeadline + " " + dueDate : ""}</summary>
       {scheduledDate ? <label className="block space-y-1.5">
         <span className="text-sm text-[var(--muted)]">{t.optionalTime}</span>
-        <input type="time" value={task.scheduledTime ?? ""} className={fieldClass}
-          onChange={(event) => void updateTask(task.id, { scheduledTime: event.target.value || null })}
-          onBlur={(event) => void updateTask(task.id, { scheduledTime: event.target.value || null })} />
+        <input type="time" value={scheduledTime} className={fieldClass}
+          onChange={(event) => { void saveProperties({ scheduledTime: event.target.value || null }); }} />
       </label> : null}
       {dueDateField}
       {repeatField}
@@ -483,11 +511,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
             key={tag}
             type="button"
             className="rounded-full bg-[var(--chip)] px-3 py-1 text-sm"
-            onClick={() =>
-              void updateTask(task.id, {
-                tags: tags.filter((item) => item !== tag),
-              })
-            }
+            disabled={extraSaving}
+            onClick={() => void runExtra(() => removeTaskTag(task.id, tag))}
             title={t.delete}
           >
             #{tag} {"\u00d7"}
@@ -495,15 +520,19 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         ))}
       </div>
       <input
+        disabled={extraSaving}
         value={tagDraft}
         onChange={(e) => setTagDraft(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key !== "Enter") return;
+          if (e.key !== "Enter" || e.nativeEvent.isComposing || e.keyCode === 229) return;
           e.preventDefault();
           const next = tagDraft.trim();
           if (!next || tags.includes(next)) return;
-          void updateTask(task.id, { tags: [...tags, next] });
-          setTagDraft("");
+          const submitted = tagDraft;
+          void runExtra(async () => {
+            await addTaskTag(task.id, next);
+            if (mounted.current) setTagDraft(current => current === submitted ? "" : current);
+          });
         }}
         placeholder={t.tagsPlaceholder}
         className={fieldClass}
@@ -529,7 +558,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
                 type="button"
                 aria-label={(child.completedAt ? t.markTaskOpen : t.markTaskComplete).replace("{title}", child.title)}
                 aria-pressed={child.completedAt != null}
-                onClick={() => void toggleTask(child.id)}
+                disabled={extraSaving}
+                onClick={() => void runExtra(() => toggleTask(child.id))}
                 className={cn(
                   "grid size-5 place-items-center rounded border",
                   child.completedAt
@@ -554,7 +584,8 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
                 aria-label={t.delete}
                 title={t.delete}
                 className="grid size-7 place-items-center rounded-lg text-[var(--danger)] hover:bg-[var(--danger-soft)]"
-                onClick={() => void deleteTask(child.id)}
+                disabled={extraSaving}
+                onClick={() => void runExtra(() => deleteTask(child.id))}
               >
                 <Trash2 className="size-3.5" />
               </button>
@@ -566,18 +597,24 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         className="flex gap-2"
         onSubmit={(e) => {
           e.preventDefault();
-          void createTask({ title: subtaskDraft, parentId: task.id });
-          setSubtaskDraft("");
+          const submitted = subtaskDraft;
+          if (!submitted.trim()) return;
+          void runExtra(async () => {
+            await createTask({ title: submitted, parentId: task.id });
+            if (mounted.current) setSubtaskDraft(current => current === submitted ? "" : current);
+          });
         }}
       >
         <input
           aria-label={t.subtaskPlaceholder}
+          disabled={extraSaving}
+          onKeyDown={event => { if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault(); }}
           value={subtaskDraft}
           onChange={(e) => setSubtaskDraft(e.target.value)}
           placeholder={t.subtaskPlaceholder}
           className={cn(fieldClass, "flex-1")}
         />
-        <button type="submit" className="ui-button-primary px-4 py-2 text-sm">
+        <button type="submit" disabled={extraSaving || !subtaskDraft.trim()} className="ui-button-primary px-4 py-2 text-sm disabled:opacity-50">
           {t.addSubtask}
         </button>
       </form>
@@ -598,7 +635,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         role="dialog"
         aria-modal="true"
         aria-label={t.tasks}
-        aria-busy={saveState === "saving"}
+        aria-busy={saveState === "saving" || propertySave.saving || extraSaving}
         className="task-detail-sheet relative z-10 mx-auto flex min-h-full w-full max-w-2xl flex-col bg-[var(--bg)] lg:m-auto lg:h-auto lg:min-h-0 lg:w-full lg:max-w-[880px] lg:overflow-hidden lg:rounded-[var(--radius-panel)] lg:border lg:border-[var(--line)] lg:bg-[var(--bg-elevated)] lg:shadow-[var(--shadow-floating)]"
       >
         {/* 顶部固定：返回 / 标题 / 关闭 */}
@@ -621,7 +658,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
               aria-live="polite"
               className={cn(
                 "mt-0.5 truncate text-xs",
-                saveState === "error" || saveState === "invalid"
+                saveState === "error" || saveState === "invalid" || propertySave.failed || extraFailed
                   ? "text-[var(--danger)]"
                   : "text-[var(--muted)]",
               )}
@@ -641,6 +678,11 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
           </button>
         </header>
 
+        <div className="space-y-1 px-4">
+          <SaveStatus locale={locale} saving={propertySave.saving} failed={propertySave.failed} onRetry={() => void propertySave.retry()} />
+          <SaveStatus locale={locale} saving={extraSaving} failed={extraFailed} onRetry={() => { if (retryExtraRef.current) void runExtra(retryExtraRef.current); }} />
+          {saveState === "error" ? <SaveStatus locale={locale} saving={false} failed onRetry={() => void persistDraft()} /> : null}
+        </div>
         {/* 主体：标题 hero + 移动单列 / 桌面双栏（同一份字段片段） */}
         <main className="min-h-0 flex-1 overflow-y-auto">
           <div className="mx-auto w-full max-w-2xl space-y-4 p-4 sm:p-6 lg:max-w-none lg:p-6">
@@ -655,6 +697,7 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
                 onChange={(e) => {
                   const next = e.target.value;
                   setTitle(next);
+                  textRevision.current++;
                   titleDraftRef.current = next;
                   setSaveState("dirty");
                 }}
@@ -701,12 +744,10 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
         <footer className="flex shrink-0 items-center gap-2 border-t border-[var(--line)] bg-[var(--bg-elevated)] px-3 py-2.5 sm:px-5">
           <button
             type="button"
-            disabled={closing}
-            onClick={() => {
-              void (async () => {
-                if (await persistDraft()) await toggleTask(task.id);
-              })();
-            }}
+            disabled={closing || extraSaving}
+            onClick={() => void runExtra(async () => {
+              if (await persistDraft() && await flushProperties() && mounted.current) await toggleTask(task.id);
+            })}
             className="ui-button-primary inline-flex flex-1 items-center justify-center gap-2 px-4 py-2 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Check className="size-4" />
@@ -716,9 +757,9 @@ export function TaskDetailPanel({ taskId }: { taskId: string }) {
             type="button"
             aria-label={deletePending ? t.confirmDeleteAction : t.delete}
             title={deletePending ? t.confirmDeleteAction : t.delete}
-            disabled={closing}
+            disabled={closing || extraSaving || propertySave.saving}
             onClick={() => {
-              if (deletePending) void deleteTask(task.id);
+              if (deletePending) void runExtra(() => deleteTask(task.id));
               else setDeletePending(true);
             }}
             className="inline-flex items-center justify-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-4 py-2 text-sm text-[var(--danger)] hover:bg-[var(--danger-soft)]"

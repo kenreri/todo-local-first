@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persistPomodoroSession } from "../lib/pomodoroPersistence";
 import { createId, db, now } from "../db";
 import {
   activeWorkSecondsAt,
@@ -27,6 +28,7 @@ let hydrated = false;
 let hydrationPromise: Promise<void> | null = null;
 
 interface PomodoroRuntime {
+  sessionId: string | null;
   phase: PomodoroPhase;
   running: boolean;
   remainingSeconds: number;
@@ -41,6 +43,12 @@ interface PomodoroRuntime {
 
 interface PomodoroState extends PomodoroRuntime {
   config: PomodoroConfig;
+  isController: boolean;
+  saveError: boolean;
+  synchronizeRuntime: (controller: boolean) => void;
+  disconnectRuntime: () => void;
+  suspendForRestore: () => Promise<void>;
+  discardForRestore: () => void;
   hydrateConfig: () => Promise<void>;
   updateConfig: (patch: Partial<PomodoroConfig>) => Promise<void>;
   bindTask: (taskId: string | null) => void;
@@ -53,6 +61,7 @@ interface PomodoroState extends PomodoroRuntime {
 
 function defaultRuntime(): PomodoroRuntime {
   return {
+    sessionId: null,
     phase: "idle",
     running: false,
     remainingSeconds: DEFAULT_POMODORO_CONFIG.workMinutes * 60,
@@ -98,6 +107,8 @@ function readRuntime(): PomodoroRuntime {
     const boundTaskId =
       typeof value.boundTaskId === "string" ? value.boundTaskId : null;
     const runtime: PomodoroRuntime = {
+      sessionId: typeof value.sessionId === "string" ? value.sessionId :
+        value.sessionStartedAt != null ? `legacy-focus-${value.sessionStartedAt}-${boundTaskId ?? "unbound"}` : null,
       phase: value.phase as PomodoroPhase,
       running: value.running === true,
       remainingSeconds:
@@ -141,6 +152,7 @@ function readRuntime(): PomodoroRuntime {
 function persistRuntime(state: PomodoroState) {
   if (typeof window === "undefined") return;
   const runtime: PomodoroRuntime = {
+    sessionId: state.sessionId,
     phase: state.phase,
     running: state.running,
     remainingSeconds: state.remainingSeconds,
@@ -158,6 +170,17 @@ function persistRuntime(state: PomodoroState) {
     // Losing reload recovery must not prevent the in-memory clock from running.
     console.warn("Could not persist the pomodoro runtime", error);
   }
+}
+
+/** A restore must be able to invalidate the persisted clock before replacing data. */
+export function invalidateStoredPomodoroRuntime() {
+  if (typeof window !== "undefined") {
+    localStorage.setItem(RUNTIME_KEY, JSON.stringify(defaultRuntime()));
+  }
+}
+
+export function restorePausedPomodoroRuntime() {
+  persistRuntime(usePomodoroStore.getState());
 }
 
 function clearTick() {
@@ -196,8 +219,8 @@ async function persistWorkSession(state: PomodoroState, endAt: number) {
     phaseDurationSeconds("work", state.config),
   );
   if (duration < 1) return false;
-  await db.pomodoroRecords.put({
-    id: createId(),
+  await persistPomodoroSession({
+    id: state.sessionId ?? `legacy-focus-${state.sessionStartedAt}-${state.sessionTaskId ?? "unbound"}`,
     taskId: state.sessionTaskId,
     startAt: state.sessionStartedAt,
     endAt,
@@ -237,13 +260,14 @@ function notifyBreakComplete() {
 const restoredRuntime = readRuntime();
 
 export const usePomodoroStore = create<PomodoroState>((set, get) => {
-  const save = () => persistRuntime(get());
+  const save = () => { if (get().isController) persistRuntime(get()); };
 
   let transition: Promise<void> | null = null;
   let runtimeRevision = 0;
 
   // Natural completion and manual finishing share one in-flight operation.
   const finishPhase = (skipped = false): Promise<void> => {
+    if (!get().isController) return Promise.resolve();
     if (transition) return transition;
     const state = get();
     if (
@@ -264,6 +288,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
         if (revision !== runtimeRevision) return;
         // Freeze elapsed time before writing. A failed write leaves a retryable session.
         set({
+          saveError: false,
           running: false,
           remainingSeconds: remainingSecondsAt(state, finishedAt),
           accumulatedWorkSeconds:
@@ -299,6 +324,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
           running: autoStart,
           remainingSeconds,
           workCycles,
+          sessionId: startsWork ? createId() : null,
           sessionTaskId: startsWork ? state.boundTaskId : null,
           sessionStartedAt: startsWork ? startedAt : null,
           accumulatedWorkSeconds: 0,
@@ -316,6 +342,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
       })
       .catch((error) => {
         // Keep the frozen runtime; the user can retry finishing or resume it.
+        if (revision === runtimeRevision) set({ saveError: true });
         console.error("Could not save the focus session", error);
       })
       .finally(() => {
@@ -332,7 +359,8 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
       if (!state.running) return;
       const remainingSeconds = remainingSecondsAt(state, now());
       if (remainingSeconds <= 0) {
-        void finishPhase();
+        if (state.isController) void finishPhase();
+        else set({ remainingSeconds: 0 });
         return;
       }
       if (remainingSeconds !== state.remainingSeconds)
@@ -343,6 +371,40 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
   return {
     ...restoredRuntime,
     config: DEFAULT_POMODORO_CONFIG,
+    isController: true,
+    saveError: false,
+
+    synchronizeRuntime: (controller) => {
+      runtimeRevision += 1;
+      clearTick();
+      set({ ...readRuntime(), isController: controller, saveError: false });
+      if (hydrated && get().running) startTicking();
+    },
+
+    disconnectRuntime: () => {
+      runtimeRevision += 1;
+      clearTick();
+      set({ isController: false });
+    },
+
+    suspendForRestore: async () => {
+      runtimeRevision += 1;
+      clearTick();
+      const state = get();
+      const stamp = now();
+      set({ running: false, remainingSeconds: remainingSecondsAt(state, stamp),
+        accumulatedWorkSeconds: state.phase === "work" ? activeWorkSecondsAt(state, stamp) : 0,
+        activeSegmentStartedAt: null, phaseEndsAt: null });
+      persistRuntime(get());
+      await transition;
+    },
+
+    discardForRestore: () => {
+      runtimeRevision += 1;
+      clearTick();
+      set({ ...defaultRuntime(), saveError: false });
+      persistRuntime(get());
+    },
 
     hydrateConfig: () => {
       if (hydrated) return Promise.resolve();
@@ -353,7 +415,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
         const state = get();
         const remainingSeconds = remainingSecondsAt(state, now());
 
-        if (state.running && remainingSeconds <= 0) {
+        if (state.isController && state.running && remainingSeconds <= 0) {
           set({ config, remainingSeconds: 0 });
           await finishPhase();
         } else {
@@ -392,7 +454,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     bindTask: (taskId) => {
       const state = get();
       if (
-        transition ||
+        !state.isController || transition ||
         isFocusBindingLocked(state.phase, state.sessionStartedAt)
       )
         return;
@@ -401,7 +463,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     },
 
     startWork: () => {
-      if (transition || get().running) return;
+      if (!get().isController || transition || get().running) return;
       unlockPomodoroAudio();
       const state = get();
       const startedAt = now();
@@ -417,6 +479,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
         running: true,
         remainingSeconds,
         phaseEndsAt: startedAt + remainingSeconds * 1000,
+        sessionId: phase === "work" ? (state.sessionId ?? createId()) : null,
         sessionStartedAt:
           phase === "work"
             ? (state.sessionStartedAt ?? startedAt)
@@ -435,7 +498,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
 
     pause: () => {
       const state = get();
-      if (transition || !state.running) return;
+      if (!state.isController || transition || !state.running) return;
       const pausedAt = now();
       if (remainingSecondsAt(state, pausedAt) <= 0) {
         void finishPhase();
@@ -456,7 +519,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     },
 
     resume: () => {
-      if (transition || get().running) return;
+      if (!get().isController || transition || get().running) return;
       unlockPomodoroAudio();
       const state = get();
       if (state.phase === "idle") {
@@ -467,6 +530,7 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
       set({
         running: true,
         phaseEndsAt: resumedAt + state.remainingSeconds * 1000,
+        sessionId: state.phase === "work" ? (state.sessionId ?? createId()) : null,
         sessionStartedAt:
           state.phase === "work"
             ? (state.sessionStartedAt ?? resumedAt)
@@ -482,12 +546,14 @@ export const usePomodoroStore = create<PomodoroState>((set, get) => {
     },
 
     reset: () => {
+      if (!get().isController) return;
       runtimeRevision += 1;
       transition = null;
       clearTick();
       const state = get();
       set({
         ...defaultRuntime(),
+        saveError: false,
         boundTaskId: state.boundTaskId,
         workCycles: state.workCycles,
         remainingSeconds: phaseDurationSeconds("work", state.config),

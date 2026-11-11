@@ -1,8 +1,9 @@
 import { createId, db, now } from "../db";
+import { lifeActions, type LifeActions } from "../lib/lifePersistence";
 import {
   ensureSeedData,
   ensureInbox,
-  getSettings,
+  updateSettings,
   normalizeWallpaperDim,
   normalizeWallpaperUrl,
   setLocale as persistLocale,
@@ -20,14 +21,9 @@ import {
   sortTasksByManualOrder,
 } from "../lib/taskTree";
 import type {
-  AnimeAirKind,
   AnimeRecord,
-  AnimeScheduleMode,
-  AnimeStatus,
   AppView,
   HabitCheckInRecord,
-  HabitCheckInStatus,
-  HabitFrequency,
   HabitRecord,
   ListRecord,
   Locale,
@@ -46,29 +42,36 @@ import { normalizeAnimeEmoji, normalizeAnimeRecord } from "../lib/anime";
 import { applyTheme } from "../lib/theme";
 import { reconcileRecords } from "../lib/reconcileRecords";
 
-let bootstrapped = false;
-const BOOTSTRAP_TIMEOUT_MS = 2500;
+let bootstrapPromise: Promise<void> | null = null;
+let bootstrapGeneration = 0;
+let disposeBootstrapRun = () => {};
+let hasLoadedOnce = false;
 
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string) {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => {
-      reject(new Error(`${label} timed out`));
-    }, ms);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
+function definedTaskFields<T extends object>(patch: T): Partial<T> {
+  const defined = { ...patch };
+  for (const key in defined) {
+    if (defined[key] === undefined) delete defined[key];
+  }
+  return defined;
+}
+
+async function changeTaskTag(id: string, value: string, operation: "add" | "remove") {
+  const tag = operation === "add" ? value.trim() : value;
+  if (operation === "add" && !tag) return;
+  await db.transaction("rw", db.tasks, async () => {
+    const task = await db.tasks.get(id);
+    if (!task || task.deletedAt != null) return;
+    const tags = operation === "remove"
+      ? task.tags.filter(item => item !== tag)
+      : task.tags.includes(tag) ? task.tags : [...task.tags, tag];
+    await db.tasks.put({ ...task, tags, updatedAt: now() });
   });
 }
 
-interface TodoState {
+interface TodoState extends LifeActions {
   ready: boolean;
+  startupStatus: "idle" | "loading" | "blocked" | "ready" | "error";
+  startupError: string | null;
   locale: Locale;
   lists: ListRecord[];
   tasks: TaskRecord[];
@@ -94,6 +97,7 @@ interface TodoState {
   mascotTop: number | null;
   checkedIds: string[];
   bootstrap: () => Promise<void>;
+  disposeBootstrap: () => void;
   setLocale: (locale: Locale) => Promise<void>;
   setView: (view: AppView) => Promise<void>;
   setTheme: (theme: ThemeMode) => Promise<void>;
@@ -149,6 +153,8 @@ interface TodoState {
     >,
   ) => Promise<void>;
   toggleTask: (id: string, occurrenceDate?: string) => Promise<void>;
+  addTaskTag: (id: string, tag: string) => Promise<void>;
+  removeTaskTag: (id: string, tag: string) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   reorderTasks: (orderedIds: string[]) => Promise<void>;
   moveTaskToList: (
@@ -161,74 +167,7 @@ interface TodoState {
     taskId: string,
     scheduledDate: string | null,
   ) => Promise<void>;
-  createHabit: (input: {
-    title: string;
-    emoji: string;
-    frequency: HabitFrequency;
-    weekdays: number[];
-    reminderTime: string | null;
-  }) => Promise<void>;
-  updateHabit: (
-    id: string,
-    patch: Partial<
-      Pick<
-        HabitRecord,
-        "title" | "emoji" | "frequency" | "weekdays" | "reminderTime"
-      >
-    >,
-  ) => Promise<void>;
-  deleteHabit: (id: string) => Promise<void>;
-  setHabitCheckIn: (
-    habitId: string,
-    date: string,
-    status: HabitCheckInStatus | null,
-  ) => Promise<void>;
-  createAnime: (input: {
-    title: string;
-    emoji: string;
-    status: AnimeStatus;
-    airKind: AnimeAirKind;
-    scheduleMode: AnimeScheduleMode;
-    currentEpisode: number;
-    totalEpisodes: number | null;
-    watchWeekday: number | null;
-    reminderTime: string | null;
-    note: string;
-    bgmSubjectId?: number | null;
-    bgmCoverUrl?: string | null;
-  }) => Promise<void>;
-  updateAnime: (
-    id: string,
-    patch: Partial<
-      Pick<
-        AnimeRecord,
-        | "title"
-        | "emoji"
-        | "status"
-        | "airKind"
-        | "scheduleMode"
-        | "currentEpisode"
-        | "totalEpisodes"
-        | "watchWeekday"
-        | "reminderTime"
-        | "note"
-        | "bgmSubjectId"
-        | "bgmCoverUrl"
-      >
-    >,
-  ) => Promise<void>;
-  incrementAnimeEpisode: (id: string) => Promise<void>;
-  deleteAnime: (id: string) => Promise<void>;
-  /** 绑定 Bangumi 条目：写入 id/封面，标题或总集数为空时自动回填。 */
-  linkAnimeBgm: (
-    id: string,
-    info: {
-      subjectId: number;
-      title: string;
-      coverUrl: string | null;
-      totalEpisodes: number | null;
-    },
-  ) => Promise<void>;
+
 }
 
 interface TodoSnapshot {
@@ -293,6 +232,8 @@ function aliveHabitCheckIns(checkIns: HabitCheckInRecord[]) {
 
 export const useTodoStore = create<TodoState>((set, get) => ({
   ready: false,
+  startupStatus: "idle",
+  startupError: null,
   locale: "zh",
   lists: [],
   tasks: [],
@@ -318,9 +259,18 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   mascotTop: null,
   checkedIds: [],
 
-  bootstrap: async () => {
-    if (bootstrapped) return;
-    bootstrapped = true;
+  disposeBootstrap: () => {
+    bootstrapGeneration += 1;
+    disposeBootstrapRun();
+    bootstrapPromise = null;
+    set({ ready: false, startupStatus: "idle", startupError: null });
+  },
+
+  bootstrap: () => {
+    if (bootstrapPromise) return bootstrapPromise;
+    if (get().startupStatus === "ready") return Promise.resolve();
+    const generation = ++bootstrapGeneration;
+    set({ ready: false, startupStatus: "loading", startupError: null });
 
     const applySnapshot = (tables: Partial<TodoSnapshot>) => {
       const current = get();
@@ -360,7 +310,7 @@ export const useTodoStore = create<TodoState>((set, get) => ({
           : null;
       const locale = coerceLocale(tables.settings?.locale ?? current.locale);
       const view = coerceAppView(
-        current.ready ? current.view : tables.settings?.defaultView ?? current.view,
+        hasLoadedOnce ? current.view : tables.settings?.defaultView ?? current.view,
         current.view,
       );
       const theme = coerceTheme(tables.settings?.theme ?? current.theme);
@@ -384,10 +334,10 @@ export const useTodoStore = create<TodoState>((set, get) => ({
         tables.settings?.mascotScale ?? current.mascotScale,
       );
       const mascotLeft = normalizeMascotCoord(
-        tables.settings?.mascotLeft ?? current.mascotLeft,
+        tables.settings ? tables.settings.mascotLeft : current.mascotLeft,
       );
       const mascotTop = normalizeMascotCoord(
-        tables.settings?.mascotTop ?? current.mascotTop,
+        tables.settings ? tables.settings.mascotTop : current.mascotTop,
       );
 
       if (
@@ -421,7 +371,6 @@ export const useTodoStore = create<TodoState>((set, get) => ({
       if (!current.ready || current.locale !== locale)
         document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
       set({
-        ready: true,
         locale,
         view,
         theme,
@@ -446,65 +395,84 @@ export const useTodoStore = create<TodoState>((set, get) => ({
       });
     };
 
-    try {
-      await withTimeout(ensureSeedData(), BOOTSTRAP_TIMEOUT_MS, "open-db");
-      await ensureInbox();
-      const settings = await withTimeout(
-        getSettings(),
-        BOOTSTRAP_TIMEOUT_MS,
-        "load-settings",
-      );
-      document.documentElement.lang = settings.locale === "zh" ? "zh-CN" : "en";
-      applyTheme(settings.theme ?? "system");
-
-      const queries = {
-        lists: () => db.lists.toArray(),
-        tasks: () => db.tasks.toArray(),
-        pomodoroRecords: () => db.pomodoroRecords.toArray(),
-        habits: () => db.habits.toArray(),
-        habitCheckIns: () => db.habitCheckIns.toArray(),
-        anime: () => db.anime.toArray(),
-        settings: () => db.settings.get("app"),
-      };
-      const loadTables = async (): Promise<TodoSnapshot> => {
-        const [lists, tasks, pomodoroRecords, habits, habitCheckIns, anime, settings] =
-          await Promise.all([
-            queries.lists(),
-            queries.tasks(),
-            queries.pomodoroRecords(),
-            queries.habits(),
-            queries.habitCheckIns(),
-            queries.anime(),
-            queries.settings(),
-          ]);
-        return {
-          lists, tasks, pomodoroRecords, habits, habitCheckIns, anime, settings,
+    let settle: () => void = () => {};
+    const pending = new Promise<void>(resolve => { settle = resolve; });
+    bootstrapPromise = pending;
+    const subscriptions: { unsubscribe: () => void }[] = [];
+    let active = true;
+    const isCurrent = () => active && generation === bootstrapGeneration;
+    const onBlocked = () => {
+      if (isCurrent()) set({ startupStatus: "blocked" });
+    };
+    db.on("blocked", onBlocked);
+    const cleanup = () => {
+      active = false;
+      subscriptions.forEach(subscription => subscription.unsubscribe());
+      db.on("blocked").unsubscribe(onBlocked);
+      settle();
+    };
+    disposeBootstrapRun = cleanup;
+    const fail = (error: unknown) => {
+      if (!isCurrent()) return;
+      cleanup();
+      bootstrapPromise = null;
+      set({
+        ready: false,
+        startupStatus: "error",
+        startupError: error instanceof Error ? error.message : String(error),
+      });
+    };
+    void (async () => {
+      try {
+        await ensureSeedData();
+        if (!isCurrent()) return;
+        await ensureInbox();
+        if (!isCurrent()) return;
+        const initial: Partial<TodoSnapshot> = {};
+        const received = new Set<keyof TodoSnapshot>();
+        let initialized = false;
+        // A table is read once for initial delivery, then only after its mutations.
+        // No normal page is shown until every initial subscription has succeeded.
+        const watch = <K extends keyof TodoSnapshot>(
+          key: K,
+          query: () => Promise<TodoSnapshot[K]>,
+        ) => {
+          if (!isCurrent()) return;
+          const subscription = liveQuery(query).subscribe({
+            next: value => {
+              if (!isCurrent()) return;
+              if (initialized) {
+                applySnapshot({ [key]: value });
+                return;
+              }
+              Object.assign(initial, { [key]: value });
+              received.add(key);
+              if (received.size === 7) {
+                applySnapshot(initial);
+                initialized = true;
+                hasLoadedOnce = true;
+                set({ ready: true, startupStatus: "ready", startupError: null });
+                bootstrapPromise = null;
+                settle();
+              }
+            },
+            error: fail,
+          });
+          if (isCurrent()) subscriptions.push(subscription);
+          else subscription.unsubscribe();
         };
-      };
-
-      applySnapshot(await loadTables());
-
-      // Settings writes and unrelated tables must not reload every collection.
-      const watch = <K extends keyof TodoSnapshot>(
-        key: K,
-        query: () => Promise<TodoSnapshot[K]>,
-      ) => {
-        liveQuery(query).subscribe({
-          next: (value) => applySnapshot({ [key]: value }),
-          error: (error) => console.error(error),
-        });
-      };
-      watch("lists", queries.lists);
-      watch("tasks", queries.tasks);
-      watch("pomodoroRecords", queries.pomodoroRecords);
-      watch("habits", queries.habits);
-      watch("habitCheckIns", queries.habitCheckIns);
-      watch("anime", queries.anime);
-      watch("settings", queries.settings);
-    } catch (error) {
-      console.error(error);
-      set({ ready: true });
-    }
+        watch("lists", () => db.lists.toArray());
+        watch("tasks", () => db.tasks.toArray());
+        watch("pomodoroRecords", () => db.pomodoroRecords.toArray());
+        watch("habits", () => db.habits.toArray());
+        watch("habitCheckIns", () => db.habitCheckIns.toArray());
+        watch("anime", () => db.anime.toArray());
+        watch("settings", () => db.settings.get("app"));
+      } catch (error) {
+        fail(error);
+      }
+    })();
+    return pending;
   },
 
   setLocale: async (locale) => {
@@ -514,13 +482,8 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   },
 
   setView: async (view) => {
-    const settings = await getSettings();
-    const nextView = coerceAppView(view, settings.defaultView);
-    await db.settings.put({
-      ...settings,
-      defaultView: nextView,
-      updatedAt: now(),
-    });
+    const nextView = coerceAppView(view);
+    await updateSettings({ defaultView: nextView });
     set({
       view: nextView,
       checkedIds: [],
@@ -532,105 +495,58 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   },
 
   setTheme: async (theme) => {
-    const settings = await getSettings();
-    await db.settings.put({ ...settings, theme, updatedAt: now() });
+    await updateSettings({ theme });
     applyTheme(theme);
     set({ theme });
   },
 
   setSakuraEnabled: async (enabled) => {
-    const settings = await getSettings();
-    await db.settings.put({
-      ...settings,
-      sakuraEnabled: enabled,
-      updatedAt: now(),
-    });
+    await updateSettings({ sakuraEnabled: enabled });
     set({ sakuraEnabled: enabled });
   },
 
   setWallpaperEnabled: async (enabled) => {
-    const settings = await getSettings();
-    await db.settings.put({
-      ...settings,
-      wallpaperEnabled: enabled,
-      updatedAt: now(),
-    });
+    await updateSettings({ wallpaperEnabled: enabled });
     set({ wallpaperEnabled: enabled });
   },
 
   setWallpaperUrl: async (url) => {
-    const settings = await getSettings();
     const wallpaperUrl = normalizeWallpaperUrl(url);
-    await db.settings.put({
-      ...settings,
-      wallpaperUrl,
-      updatedAt: now(),
-    });
+    await updateSettings({ wallpaperUrl });
     set({ wallpaperUrl });
   },
 
   setWallpaperDim: async (dim) => {
-    const settings = await getSettings();
     const wallpaperDim = normalizeWallpaperDim(dim);
-    await db.settings.put({
-      ...settings,
-      wallpaperDim,
-      updatedAt: now(),
-    });
+    await updateSettings({ wallpaperDim });
     set({ wallpaperDim });
   },
 
   setSidebarCollapsed: async (collapsed) => {
-    const settings = await getSettings();
-    await db.settings.put({
-      ...settings,
-      sidebarCollapsed: collapsed,
-      updatedAt: now(),
-    });
+    await updateSettings({ sidebarCollapsed: collapsed });
     set({ sidebarCollapsed: collapsed });
   },
 
   setListsGroupCollapsed: async (collapsed) => {
-    const settings = await getSettings();
-    await db.settings.put({
-      ...settings,
-      listsGroupCollapsed: collapsed,
-      updatedAt: now(),
-    });
+    await updateSettings({ listsGroupCollapsed: collapsed });
     set({ listsGroupCollapsed: collapsed });
   },
 
   setMascotEnabled: async (enabled) => {
-    const settings = await getSettings();
-    await db.settings.put({
-      ...settings,
-      mascotEnabled: enabled,
-      updatedAt: now(),
-    });
+    await updateSettings({ mascotEnabled: enabled });
     set({ mascotEnabled: enabled });
   },
 
   setMascotScale: async (scale) => {
-    const settings = await getSettings();
     const mascotScale = normalizeMascotScale(scale);
-    await db.settings.put({
-      ...settings,
-      mascotScale,
-      updatedAt: now(),
-    });
+    await updateSettings({ mascotScale });
     set({ mascotScale });
   },
 
   setMascotPosition: async (left, top) => {
-    const settings = await getSettings();
     const mascotLeft = normalizeMascotCoord(left);
     const mascotTop = normalizeMascotCoord(top);
-    await db.settings.put({
-      ...settings,
-      mascotLeft,
-      mascotTop,
-      updatedAt: now(),
-    });
+    await updateSettings({ mascotLeft, mascotTop });
     set({ mascotLeft, mascotTop });
   },
 
@@ -723,7 +639,9 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   },
 
   batchMove: async (ids, listId) => {
-    for (const id of ids) await get().moveTaskToList(id, listId);
+    await db.transaction("rw", db.tasks, async () => {
+      for (const id of ids) await get().moveTaskToList(id, listId);
+    });
     set({ checkedIds: [] });
   },
 
@@ -761,9 +679,11 @@ export const useTodoStore = create<TodoState>((set, get) => ({
   },
 
   renameList: async (id, name) => {
-    const list = await db.lists.get(id);
-    if (!list || list.deletedAt) return;
-    await db.lists.put({ ...list, name: name.trim(), updatedAt: now() });
+    await db.transaction("rw", db.lists, async () => {
+      const list = await db.lists.get(id);
+      if (!list || list.deletedAt != null) return;
+      await db.lists.put({ ...list, name: name.trim(), updatedAt: now() });
+    });
   },
 
   deleteList: async (id) => {
@@ -843,12 +763,15 @@ export const useTodoStore = create<TodoState>((set, get) => ({
       }
       await db.tasks.put({
         ...task,
-        ...patch,
+        ...definedTaskFields(patch),
         title: patch.title?.trim() ?? task.title,
         updatedAt: now(),
       });
     });
   },
+
+  addTaskTag: (id, tag) => changeTaskTag(id, tag, "add"),
+  removeTaskTag: (id, tag) => changeTaskTag(id, tag, "remove"),
 
   toggleTask: async (id, occurrenceDate) => {
     await db.transaction("rw", db.tasks, async () => {
@@ -983,252 +906,8 @@ export const useTodoStore = create<TodoState>((set, get) => ({
     });
   },
 
-  createHabit: async (input) => {
-    if (!input.title.trim()) return;
-    const stamp = now();
-    await db.habits.put({
-      id: createId(),
-      title: input.title.trim(),
-      emoji: input.emoji.trim() || "✨",
-      type: "general",
-      frequency: input.frequency,
-      weekdays:
-        input.frequency === "weekly"
-          ? [...new Set(input.weekdays)].sort((a, b) => a - b)
-          : [],
-      reminderTime: input.reminderTime || null,
-      currentEpisode: 0,
-      incrementEpisode: false,
-      createdAt: stamp,
-      updatedAt: stamp,
-      deletedAt: null,
-    });
-  },
+  ...lifeActions,
 
-  updateHabit: async (id, patch) => {
-    const habit = await db.habits.get(id);
-    if (!habit || habit.deletedAt != null) return;
-    const nextFrequency = patch.frequency ?? habit.frequency;
-    await db.habits.put({
-      ...habit,
-      ...patch,
-      title: patch.title?.trim() || habit.title,
-      emoji: patch.emoji?.trim() || habit.emoji,
-      weekdays:
-        nextFrequency === "weekly"
-          ? [...new Set(patch.weekdays ?? habit.weekdays)].sort((a, b) => a - b)
-          : [],
-      type: "general",
-      currentEpisode: 0,
-      incrementEpisode: false,
-      updatedAt: now(),
-    });
-  },
-
-  deleteHabit: async (id) => {
-    const stamp = now();
-    await db.transaction("rw", db.habits, db.habitCheckIns, async () => {
-      const habit = await db.habits.get(id);
-      if (!habit || habit.deletedAt != null) return;
-      await db.habits.put({ ...habit, deletedAt: stamp, updatedAt: stamp });
-      const related = await db.habitCheckIns
-        .where("habitId")
-        .equals(id)
-        .toArray();
-      await Promise.all(
-        related
-          .filter((item) => item.deletedAt == null)
-          .map((item) =>
-            db.habitCheckIns.put({
-              ...item,
-              deletedAt: stamp,
-              updatedAt: stamp,
-            }),
-          ),
-      );
-    });
-  },
-
-  setHabitCheckIn: async (habitId, date, status) => {
-    const stamp = now();
-    await db.transaction("rw", db.habits, db.habitCheckIns, async () => {
-      const habit = await db.habits.get(habitId);
-      if (!habit || habit.deletedAt != null) return;
-      const records = await db.habitCheckIns
-        .where("[habitId+date]")
-        .equals([habitId, date])
-        .toArray();
-      const existing = records.find((item) => item.deletedAt == null);
-      if (status == null) {
-        if (existing) {
-          await db.habitCheckIns.put({
-            ...existing,
-            deletedAt: stamp,
-            updatedAt: stamp,
-          });
-        }
-      } else if (existing) {
-        await db.habitCheckIns.put({
-          ...existing,
-          status,
-          episode: null,
-          updatedAt: stamp,
-        });
-      } else {
-        await db.habitCheckIns.put({
-          id: createId(),
-          habitId,
-          date,
-          status,
-          episode: null,
-          createdAt: stamp,
-          updatedAt: stamp,
-          deletedAt: null,
-        });
-      }
-    });
-  },
-
-  createAnime: async (input) => {
-    if (!input.title.trim()) return;
-    const stamp = now();
-    const totalEpisodes =
-      input.totalEpisodes == null
-        ? null
-        : Math.max(1, Math.floor(input.totalEpisodes));
-    const currentEpisode = Math.max(0, Math.floor(input.currentEpisode));
-    const airKind = input.airKind === "finished" ? "finished" : "ongoing";
-    const scheduleMode: AnimeScheduleMode =
-      input.scheduleMode === "weekly" || input.scheduleMode === "daily"
-        ? input.scheduleMode
-        : input.watchWeekday != null
-          ? "weekly"
-          : "none";
-    const watchWeekday = scheduleMode === "weekly" ? input.watchWeekday : null;
-    await db.anime.put({
-      id: createId(),
-      title: input.title.trim(),
-      emoji: normalizeAnimeEmoji(input.emoji),
-      status: input.status,
-      airKind,
-      scheduleMode,
-      currentEpisode:
-        totalEpisodes == null
-          ? currentEpisode
-          : Math.min(currentEpisode, totalEpisodes),
-      totalEpisodes,
-      watchWeekday,
-      reminderTime: scheduleMode === "none" ? null : input.reminderTime || null,
-      note: input.note.trim(),
-      lastWatchedAt: null,
-      bgmSubjectId: input.bgmSubjectId ?? null,
-      bgmCoverUrl: input.bgmCoverUrl ?? null,
-      createdAt: stamp,
-      updatedAt: stamp,
-      deletedAt: null,
-    });
-  },
-
-  updateAnime: async (id, patch) => {
-    const anime = await db.anime.get(id);
-    if (!anime || anime.deletedAt != null) return;
-    const totalEpisodes =
-      patch.totalEpisodes === undefined
-        ? anime.totalEpisodes
-        : patch.totalEpisodes == null
-          ? null
-          : Math.max(1, Math.floor(patch.totalEpisodes));
-    const requestedEpisode = Math.max(
-      0,
-      Math.floor(patch.currentEpisode ?? anime.currentEpisode),
-    );
-    const currentEpisode =
-      totalEpisodes == null
-        ? requestedEpisode
-        : Math.min(requestedEpisode, totalEpisodes);
-    const airKind =
-      patch.airKind === "finished"
-        ? "finished"
-        : patch.airKind === "ongoing"
-          ? "ongoing"
-          : anime.airKind;
-    const scheduleMode: AnimeScheduleMode =
-      patch.scheduleMode === "weekly" ||
-      patch.scheduleMode === "daily" ||
-      patch.scheduleMode === "none"
-        ? patch.scheduleMode
-        : anime.scheduleMode;
-    const watchWeekday =
-      scheduleMode === "weekly"
-        ? patch.watchWeekday === undefined
-          ? anime.watchWeekday
-          : patch.watchWeekday
-        : null;
-    await db.anime.put({
-      ...anime,
-      ...patch,
-      title: patch.title?.trim() || anime.title,
-      emoji: normalizeAnimeEmoji(patch.emoji ?? anime.emoji),
-      note: patch.note?.trim() ?? anime.note,
-      currentEpisode,
-      totalEpisodes,
-      airKind,
-      scheduleMode,
-      watchWeekday,
-      reminderTime:
-        scheduleMode === "none"
-          ? null
-          : patch.reminderTime === undefined
-            ? anime.reminderTime
-            : patch.reminderTime || null,
-      bgmSubjectId:
-        patch.bgmSubjectId === undefined
-          ? anime.bgmSubjectId
-          : patch.bgmSubjectId,
-      bgmCoverUrl:
-        patch.bgmCoverUrl === undefined ? anime.bgmCoverUrl : patch.bgmCoverUrl,
-      updatedAt: now(),
-    });
-  },
-
-  incrementAnimeEpisode: async (id) => {
-    const anime = await db.anime.get(id);
-    if (!anime || anime.deletedAt != null) return;
-    const stamp = now();
-    const nextEpisode = anime.totalEpisodes
-      ? Math.min(anime.currentEpisode + 1, anime.totalEpisodes)
-      : anime.currentEpisode + 1;
-    await db.anime.put({
-      ...anime,
-      currentEpisode: nextEpisode,
-      status:
-        anime.totalEpisodes != null && nextEpisode >= anime.totalEpisodes
-          ? "completed"
-          : "watching",
-      lastWatchedAt: stamp,
-      updatedAt: stamp,
-    });
-  },
-
-  linkAnimeBgm: async (id, info) => {
-    const item = await db.anime.get(id);
-    if (!item || item.deletedAt != null) return;
-    await db.anime.put({
-      ...item,
-      bgmSubjectId: info.subjectId,
-      bgmCoverUrl: info.coverUrl,
-      title: info.title.trim() || item.title,
-      totalEpisodes: item.totalEpisodes ?? info.totalEpisodes,
-      updatedAt: now(),
-    });
-  },
-
-  deleteAnime: async (id) => {
-    const anime = await db.anime.get(id);
-    if (!anime || anime.deletedAt != null) return;
-    const stamp = now();
-    await db.anime.put({ ...anime, deletedAt: stamp, updatedAt: stamp });
-  },
 }));
 
 function toDateFallback(task: TaskRecord) {

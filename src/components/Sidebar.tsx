@@ -1,8 +1,11 @@
+import { useViewNavigation } from "../hooks/useViewNavigation";
+import { SaveStatus } from "./SaveStatus";
 import { useEffect, useRef, useState } from "react";
 import { Check, MoreHorizontal, Pencil, Plus, Trash2, X } from "lucide-react";
 import { ui } from "../i18n/messages";
 import { cn } from "../lib/cn";
 import { useTodoStore } from "../store/todoStore";
+import { useSaveFeedback } from "../hooks/useSaveFeedback";
 
 export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const rootRef = useRef<HTMLElement>(null);
@@ -11,7 +14,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
   const view = useTodoStore((state) => state.view);
   const selectedListId = useTodoStore((state) => state.selectedListId);
   const selectList = useTodoStore((state) => state.selectList);
-  const setView = useTodoStore((state) => state.setView);
+  const navigation = useViewNavigation();
   const createList = useTodoStore((state) => state.createList);
   const renameList = useTodoStore((state) => state.renameList);
   const deleteList = useTodoStore((state) => state.deleteList);
@@ -22,6 +25,30 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     null,
   );
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const { run, saving, failed } = useSaveFeedback();
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+
+  const saveName = async () => {
+    if (!editing?.name.trim()) return;
+    const submitted = editing;
+    if (await run(() => renameList(submitted.id, submitted.name))) {
+      setEditing((current) =>
+        current?.id === submitted.id && current.name === submitted.name ? null : current,
+      );
+    }
+  };
+
+  const saveNewList = async () => {
+    if (!draft.trim()) return;
+    const submitted = draft;
+    if (await run(() => createList(submitted))) {
+      if (draftRef.current === submitted) {
+        setDraft("");
+        setCreating(false);
+      }
+    }
+  };
 
   useEffect(() => {
     if (!openMenuId) return;
@@ -39,15 +66,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
     };
   }, [openMenuId]);
 
-  const openList = async (id: string) => {
-    setOpenMenuId(null);
+  const openList = (id: string) => navigation.navigate("list", () => {
     selectList(id);
-    await setView("list");
+    setOpenMenuId(null);
     onNavigate?.();
-  };
+  });
 
   return (
-    <section ref={rootRef} className="mt-1 ml-3 border-l border-[var(--line)] pl-2">
+    <section ref={rootRef} aria-busy={saving || navigation.saving} className="mt-1 ml-3 border-l border-[var(--line)] pl-2">
+      <SaveStatus locale={locale} {...navigation} onRetry={() => void navigation.retry()} />
       <ul className="space-y-0.5">
         {lists.map((list) => {
           const selected = view === "list" && selectedListId === list.id;
@@ -58,13 +85,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   className="flex items-center gap-1"
                   onSubmit={(event) => {
                     event.preventDefault();
-                    if (editing.name.trim())
-                      void renameList(list.id, editing.name);
-                    setEditing(null);
+                    void saveName();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault();
                   }}
                 >
                   <input
                     autoFocus
+                    aria-label={t.renameList}
                     value={editing.name}
                     onChange={(event) =>
                       setEditing({ id: list.id, name: event.target.value })
@@ -73,6 +102,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   />
                   <button
                     type="submit"
+                    disabled={saving || navigation.saving || !editing.name.trim()}
                     aria-label={t.save}
                     className="rounded-lg p-1.5 text-[var(--accent)]"
                   >
@@ -80,6 +110,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   </button>
                   <button
                     type="button"
+                    disabled={saving || navigation.saving}
                     aria-label={t.cancel}
                     onClick={() => setEditing(null)}
                     className="rounded-lg p-1.5 text-[var(--muted)]"
@@ -91,6 +122,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                 <div className="group relative flex items-center gap-0.5">
                   <button
                     type="button"
+                    disabled={saving || navigation.saving}
                     onClick={() => void openList(list.id)}
                     className={cn(
                       "flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius-small)] px-2.5 py-1.5 text-left text-sm transition",
@@ -107,6 +139,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                   </button>
                   <button
                     type="button"
+                    disabled={saving || navigation.saving}
                     aria-label={t.listActions}
                     title={t.listActions}
                     aria-expanded={openMenuId === list.id}
@@ -131,6 +164,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                     >
                       <button
                         type="button"
+                        disabled={saving || navigation.saving}
                         role="menuitem"
                         onClick={() => {
                           setEditing({ id: list.id, name: list.name });
@@ -143,11 +177,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       </button>
                       <button
                         type="button"
+                        disabled={saving || navigation.saving}
                         role="menuitem"
                         onClick={() => {
-                          setOpenMenuId(null);
-                          if (window.confirm(t.confirmDeleteList))
-                            void deleteList(list.id);
+                          if (window.confirm(t.confirmDeleteList)) {
+                            void run(() => deleteList(list.id)).then((saved) => {
+                              if (saved) setOpenMenuId(null);
+                            });
+                          }
                         }}
                         className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm text-[var(--danger)] hover:bg-[var(--danger-soft)]"
                       >
@@ -168,14 +205,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           className="mt-2 space-y-2"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!draft.trim()) return;
-            void createList(draft);
-            setDraft("");
-            setCreating(false);
+            void saveNewList();
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && (event.nativeEvent.isComposing || event.keyCode === 229)) event.preventDefault();
           }}
         >
           <input
             autoFocus
+            aria-label={t.newList}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder={t.listNamePlaceholder}
@@ -184,12 +222,14 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           <div className="flex gap-1.5">
             <button
               type="submit"
+              disabled={saving || navigation.saving || !draft.trim()}
               className="flex-1 rounded-lg bg-[var(--accent)] px-2 py-1.5 text-sm text-[var(--on-accent)]"
             >
               {t.save}
             </button>
             <button
               type="button"
+              disabled={saving || navigation.saving}
               onClick={() => {
                 setCreating(false);
                 setDraft("");
@@ -203,6 +243,7 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
       ) : (
         <button
           type="button"
+          disabled={saving || navigation.saving}
           onClick={() => setCreating(true)}
           className="mt-1 inline-flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left text-sm text-[var(--muted)] hover:bg-[var(--hover)] hover:text-[var(--ink)]"
         >
@@ -210,6 +251,8 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
           {t.newList}
         </button>
       )}
+      {saving ? <p role="status" className="mt-2 text-xs text-[var(--muted)]">{t.taskSaving}</p> : null}
+      {failed ? <p role="alert" className="mt-2 text-xs text-[var(--danger)]">{t.taskSaveFailed}</p> : null}
     </section>
   );
 }

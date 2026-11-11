@@ -1,9 +1,10 @@
+import { useShallow } from "zustand/react/shallow";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Archive, Inbox, Search, SlidersHorizontal, X } from "lucide-react";
 import { useWorkspace } from "../hooks/useWorkspace";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { cn } from "../lib/cn";
-import { toDateKey } from "../lib/dates";
+import { useLocalDate, useLocalMinute } from "../hooks/useLocalDate";
 import {
   deleteWorkspaceItem,
   updateWorkspaceItem,
@@ -11,7 +12,6 @@ import {
 } from "../lib/workspace";
 import { useTodoStore } from "../store/todoStore";
 import {
-  draftPatch,
   setWorkspaceDraft,
   useWorkspaceUiStore,
   type WorkspaceScope,
@@ -32,9 +32,10 @@ export function WorkspaceView() {
   const zh = useTodoStore((state) => state.locale) === "zh";
   const tasks = useTodoStore((state) => state.tasks);
   const selectTask = useTodoStore((state) => state.selectTask);
-  const { items, attachments, loading, failed } = useWorkspace();
-  const { scope, kind, intention, search, limit, editingId, drafts } =
-    useWorkspaceUiStore();
+  const { items, attachments, loading, failed, retry } = useWorkspace();
+  const { scope, kind, intention, search, limit, editingId } =
+    useWorkspaceUiStore(useShallow(({ scope, kind, intention, search, limit, editingId }) =>
+      ({ scope, kind, intention, search, limit, editingId })));
   const setUi = useWorkspaceUiStore.setState;
   const [advanced, setAdvanced] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -84,15 +85,17 @@ export function WorkspaceView() {
     return result;
   }, [attachments]);
   const editing = items.find((item) => item.id === editingId);
-  const today = toDateKey(new Date());
-  const recentCutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const inboxCount = items.filter(
+  const today = useLocalDate();
+  const recentCutoff = useLocalMinute() - 7 * 24 * 60 * 60 * 1000;
+  const inboxCount = useMemo(() => items.filter(
     (item) =>
       item.archivedAt == null &&
       item.kind === "inbox" &&
       !taskMap.has(item.taskId ?? ""),
-  ).length;
-  const filtered = items.filter((item) => {
+  ).length, [items, taskMap]);
+  const filtered = useMemo(() => {
+    const query = search.trim().toLocaleLowerCase();
+    return items.filter((item) => {
     if (
       scope === "archived" ? item.archivedAt == null : item.archivedAt != null
     )
@@ -104,6 +107,7 @@ export function WorkspaceView() {
     if (kind !== "all" && item.kind !== kind) return false;
     if (intention !== "all" && (!task || item.intention !== intention))
       return false;
+    if (!query) return true;
     return [
       item.title,
       item.body,
@@ -112,8 +116,9 @@ export function WorkspaceView() {
     ]
       .join("\n")
       .toLocaleLowerCase()
-      .includes(search.trim().toLocaleLowerCase());
-  });
+      .includes(query);
+    });
+  }, [items, taskMap, fileMap, scope, kind, intention, search, recentCutoff]);
   const guard = (action: () => void) => {
     if (editorRef.current) editorRef.current.requestLeave(action);
     else action();
@@ -408,12 +413,13 @@ export function WorkspaceView() {
             </p>
           ) : null}
           {error || failed ? (
-            <p role="alert" className="text-sm text-[var(--danger)]">
+            <div role="alert" className="text-sm text-[var(--danger)]">
               {error ||
                 (zh
-                  ? "读取收集失败，请刷新重试。"
-                  : "Could not load captures. Please reload.")}
-            </p>
+                  ? "读取收集失败，当前内容可能不是最新。"
+                  : "Could not load captures. Displayed content may be out of date.")}
+              {failed ? <button type="button" className="ui-button-secondary ml-3 min-h-10 px-3" onClick={retry}>{zh ? "重试读取" : "Retry loading"}</button> : null}
+            </div>
           ) : null}
           {loading ? (
             <p className="py-10 text-center text-sm text-[var(--muted)]">
@@ -467,10 +473,6 @@ export function WorkspaceView() {
                 files={fileMap.get(item.id) ?? []}
                 task={item.taskId ? taskMap.get(item.taskId) : undefined}
                 selected={editingId === item.id}
-                draft={
-                  !!drafts[item.id] &&
-                  Object.keys(draftPatch(drafts[item.id])).length > 0
-                }
                 busy={busy}
                 onOpen={() => openItem(item.id)}
                 onTask={openTask}

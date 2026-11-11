@@ -1,14 +1,16 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ui } from "../i18n/messages";
-import { addDays, todayKey } from "../lib/dates";
+import { useLocalDate } from "../hooks/useLocalDate";
+import { addDays } from "../lib/dates";
 import { useTodoStore } from "../store/todoStore";
 import type { TaskRecord } from "../types";
 
 /** Reuses scheduledDate; hard deadlines and recurring anchors are untouched. */
-export function TaskScheduleControl({ task, compact = false, onChange }: {
+export function TaskScheduleControl({ task, compact = false, onChange, saveDate }: {
   task: TaskRecord;
   compact?: boolean;
   onChange?: (date: string | null) => void;
+  saveDate?: (date: string | null) => Promise<boolean>;
 }) {
   const locale = useTodoStore((state) => state.locale);
   const updateTask = useTodoStore((state) => state.updateTask);
@@ -16,19 +18,28 @@ export function TaskScheduleControl({ task, compact = false, onChange }: {
   const [later, setLater] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(false);
-  const today = todayKey();
+  const today = useLocalDate();
+  const mounted = useRef(true);
+  const busy = useRef(false);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const [futureDate, setFutureDate] = useState(task.scheduledDate && task.scheduledDate > today ? task.scheduledDate : addDays(today, 1));
   const change = async (date: string | null) => {
+    if (busy.current) return;
+    busy.current = true;
     setSaving(true);
     setError(false);
     try {
-      await updateTask(task.id, { scheduledDate: date, ...(!date ? { scheduledTime: null } : {}) });
+      if (saveDate) {
+        if (!(await saveDate(date))) return;
+      } else await updateTask(task.id, { scheduledDate: date, ...(!date ? { scheduledTime: null } : {}) });
+      if (!mounted.current) return;
       onChange?.(date);
       setLater(false);
     } catch {
-      setError(true);
+      if (mounted.current) setError(true);
     } finally {
-      setSaving(false);
+      busy.current = false;
+      if (mounted.current) setSaving(false);
     }
   };
   return (

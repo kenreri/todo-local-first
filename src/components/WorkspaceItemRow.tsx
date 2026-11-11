@@ -1,3 +1,4 @@
+import { draftPatch, useWorkspaceUiStore } from "../store/workspaceUiStore";
 import { useEffect, useRef, useState } from "react";
 import {
   Archive,
@@ -39,7 +40,6 @@ export function WorkspaceItemRow({
   files,
   task,
   selected,
-  draft,
   busy,
   onOpen,
   onTask,
@@ -50,13 +50,16 @@ export function WorkspaceItemRow({
   files: AttachmentRecord[];
   task?: TaskRecord;
   selected: boolean;
-  draft: boolean;
   busy: boolean;
   onOpen: () => void;
   onTask: (id: string) => void;
   onArchive: () => void;
   onDelete: () => void;
 }) {
+  const draft = useWorkspaceUiStore((state) => {
+    const savedDraft = state.drafts[item.id];
+    return savedDraft ? Object.keys(draftPatch(savedDraft)).length > 0 : false;
+  });
   const zh = useTodoStore((state) => state.locale) === "zh";
   const [confirm, setConfirm] = useState(false);
   const menu = useRef<HTMLDetailsElement>(null);

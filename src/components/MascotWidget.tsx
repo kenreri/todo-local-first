@@ -22,6 +22,10 @@ import {
   snapMascotBox,
 } from "../lib/mascot";
 import { useTodoStore } from "../store/todoStore";
+import { usePendingPatch } from "../hooks/usePendingPatch";
+import { updateSettings } from "../lib/settings";
+import { SaveStatus } from "./SaveStatus";
+import type { SettingsRecord } from "../types";
 
 const WHALE_SRC = "/mascot/DSniang1.png";
 const GIF_SRC = "/mascot/rua.gif";
@@ -45,9 +49,9 @@ export function MascotWidget() {
   const scale = useTodoStore((state) => state.mascotScale);
   const storedLeft = useTodoStore((state) => state.mascotLeft);
   const storedTop = useTodoStore((state) => state.mascotTop);
-  const setMascotEnabled = useTodoStore((state) => state.setMascotEnabled);
-  const setMascotScale = useTodoStore((state) => state.setMascotScale);
-  const setMascotPosition = useTodoStore((state) => state.setMascotPosition);
+  const save = usePendingPatch<Pick<SettingsRecord, "mascotScale" | "mascotEnabled" | "mascotLeft" | "mascotTop">>(updateSettings);
+  const saveMascot = save.submit;
+  const shownScale = save.patch.mascotScale ?? scale;
   const t = ui(locale);
 
   const rootRef = useRef<HTMLDivElement>(null);
@@ -312,7 +316,7 @@ export function MascotWidget() {
         if (!current) return;
         settleAt(current.left, current.top);
         const settled = boxRef.current;
-        if (settled) void setMascotPosition(settled.left, settled.top);
+        if (settled) void saveMascot({ mascotLeft: settled.left, mascotTop: settled.top });
         return;
       }
       openStatusBubble();
@@ -347,7 +351,7 @@ export function MascotWidget() {
     measure,
     openStatusBubble,
     play,
-    setMascotPosition,
+    saveMascot,
     settleAt,
   ]);
 
@@ -528,7 +532,7 @@ export function MascotWidget() {
                   max={MASCOT_SCALE_MAX}
                   step={0.1}
                   className="dshwv-range"
-                  value={scale}
+                  value={shownScale}
                   onPointerDown={() => {
                     const el = rootRef.current;
                     if (el) el.style.transition = "none";
@@ -538,10 +542,10 @@ export function MascotWidget() {
                     if (el) el.style.transition = "";
                   }}
                   onChange={(event) =>
-                    void setMascotScale(Number(event.target.value))
+                    void saveMascot({ mascotScale: Number(event.target.value) })
                   }
                 />
-                <span>{scale.toFixed(1)}</span>
+                <span>{shownScale.toFixed(1)}</span>
               </label>
               <label className="dshwv-menu-row">
                 <span>{t.mascotVolume}</span>
@@ -560,7 +564,7 @@ export function MascotWidget() {
                 <button
                   type="button"
                   className="dshwv-hide"
-                  onClick={() => void setMascotEnabled(false)}
+                  onClick={() => void saveMascot({ mascotEnabled: false })}
                 >
                   {t.mascotHide}
                 </button>
@@ -569,6 +573,12 @@ export function MascotWidget() {
             document.body,
           )
         : null}
+      {save.failed ? createPortal(
+        <div className="fixed right-4 bottom-[calc(5rem+env(safe-area-inset-bottom))] z-50 max-w-[calc(100%-2rem)] rounded-[var(--radius-control)] border border-[var(--line)] bg-[var(--bg-elevated)] p-3 shadow-[var(--shadow-floating)] lg:bottom-4"
+          onPointerDown={(event) => event.stopPropagation()}>
+          <SaveStatus locale={locale} saving={save.saving} failed onRetry={() => void save.retry()} />
+        </div>, document.body,
+      ) : null}
     </>
   );
 }

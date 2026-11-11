@@ -68,7 +68,7 @@ function delayWrite() {
   const write = vi
     .spyOn(db.pomodoroRecords, "put")
     .mockImplementationOnce((record, key) =>
-      Dexie.Promise.resolve(gate.promise.then(() => put(record, key))),
+      Dexie.Promise.resolve(Dexie.waitFor(gate.promise).then(() => put(record, key))),
     );
   return { ...gate, write };
 }
@@ -435,4 +435,50 @@ describe("pomodoro recovery", () => {
     expect(await db.pomodoroRecords.count()).toBe(1);
     expect(store.getState().phase).toBe("shortBreak");
   });
+});
+
+it("deduplicates a restored session when independent page stores finish together", async () => {
+  const first = await load();
+  first.getState().startWork();
+  vi.resetModules();
+  const second = (await import("./pomodoroStore")).usePomodoroStore;
+  const otherDb = (await import("../db")).db;
+  await second.getState().hydrateConfig();
+  vi.setSystemTime(START + 10_000);
+  try {
+    await Promise.all([first.getState().skip(), second.getState().skip()]);
+    expect(await db.pomodoroRecords.count()).toBe(1);
+  } finally { otherDb.close(); }
+});
+
+it("hands a shared running session to the waiting page when its controller disconnects", async () => {
+  const events = new EventTarget();
+  vi.stubGlobal("window", {
+    addEventListener: events.addEventListener.bind(events),
+    removeEventListener: events.removeEventListener.bind(events),
+  });
+  const first = await load();
+  const disconnectFirst = (await import("../lib/pomodoroCoordinator")).connectPomodoroRuntime();
+  await vi.waitFor(() => expect(first.getState().isController).toBe(true));
+  first.getState().startWork();
+  vi.resetModules();
+  const second = (await import("./pomodoroStore")).usePomodoroStore;
+  const otherDb = (await import("../db")).db;
+  const disconnectSecond = (await import("../lib/pomodoroCoordinator")).connectPomodoroRuntime();
+  try {
+    await second.getState().hydrateConfig();
+    expect(second.getState().isController).toBe(false);
+    expect(second.getState().sessionId).toBe(first.getState().sessionId);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(second.getState().remainingSeconds).toBe(55);
+    await second.getState().skip();
+    expect(await db.pomodoroRecords.count()).toBe(0);
+    disconnectFirst();
+    await vi.waitFor(() => expect(second.getState().isController).toBe(true));
+    await second.getState().skip();
+    expect(await db.pomodoroRecords.count()).toBe(1);
+    expect((await db.pomodoroRecords.toArray())[0]?.duration).toBe(5);
+  } finally {
+    disconnectFirst(); disconnectSecond(); otherDb.close();
+  }
 });
